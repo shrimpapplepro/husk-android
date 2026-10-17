@@ -1,6 +1,8 @@
 #!/bin/zsh
 # Build HuskDroid.ipa for sideloading.
-#   src/huskdroid/build.sh [OUT.ipa]      (default ~/Desktop/HuskDroid-VERSION-(BUILD).ipa)
+#   src/huskdroid/build.sh [OUT.ipa]      unsigned IPA for Sideloadly (~/Desktop/HuskDroid-VERSION-(BUILD).ipa)
+#   src/huskdroid/build.sh --install      signed with the paid team and installed on Arona (keeps the
+#                                         memory entitlements Sideloadly drops)
 # The companion token is read from the vault and handed to xcodebuild through the environment,
 # so it is never on a command line or in a tracked file.
 set -eu
@@ -15,6 +17,13 @@ export HUSKDROID_TOKEN=$PERLICA_SECRET
 unset PERLICA_SECRET
 export DEVELOPER_DIR=${DEVELOPER_DIR:-/Applications/Xcode-beta.app/Contents/Developer}
 
+TEAM=ABCDE12345
+UDID=00000000-0000000000000000
+# Sideloadly's id for this app (it appends the team); signing the same id installs over it and keeps the data.
+BUNDLE=com.shrimpapplepro.huskdroid.$TEAM
+INSTALL=false
+[[ ${1:-} == --install ]] && { INSTALL=true; shift; }
+
 cd $HERE
 # Version from project.yml; build number = the fork's commit count, so it only rises and names a commit.
 VERSION=$(awk -F'"' '/MARKETING_VERSION/ {print $2; exit}' project.yml)
@@ -23,10 +32,20 @@ OUT=${1:-$HOME/Desktop/HuskDroid-$VERSION-($BUILD).ipa}
 echo "==> HuskDroid $VERSION ($BUILD), $(git -C $ROOT rev-parse --short HEAD)$(git -C $ROOT diff --quiet || echo '-dirty')"
 echo "==> generating the project"
 xcodegen generate --quiet
-echo "==> building"
-xcodebuild -project HuskDroid.xcodeproj -scheme HuskDroid -sdk iphoneos -configuration Release \
-  -derivedDataPath $DD CURRENT_PROJECT_VERSION=$BUILD CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
-  build > $DD.log 2>&1 || true
+if $INSTALL; then
+  DD=$DD-signed
+  echo "==> building, signed by team $TEAM as $BUNDLE"
+  xcodebuild -project HuskDroid.xcodeproj -scheme HuskDroid -sdk iphoneos -configuration Release \
+    -derivedDataPath $DD -allowProvisioningUpdates CURRENT_PROJECT_VERSION=$BUILD \
+    DEVELOPMENT_TEAM=$TEAM CODE_SIGN_STYLE=Automatic PRODUCT_BUNDLE_IDENTIFIER=$BUNDLE \
+    CODE_SIGN_ENTITLEMENTS=HuskDroid/HuskDroid-signed.entitlements \
+    build > $DD.log 2>&1 || true
+else
+  echo "==> building"
+  xcodebuild -project HuskDroid.xcodeproj -scheme HuskDroid -sdk iphoneos -configuration Release \
+    -derivedDataPath $DD CURRENT_PROJECT_VERSION=$BUILD CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+    build > $DD.log 2>&1 || true
+fi
 grep -q 'BUILD SUCCEEDED' $DD.log || { grep -E 'error:' $DD.log | head -20; echo "build failed (log: $DD.log)"; exit 1; }
 
 APP=$DD/Build/Products/Release-iphoneos/HuskDroid.app
@@ -41,6 +60,16 @@ tok=$(plutil -extract HDCompanionToken raw -o - $APP/Info.plist 2>/dev/null || t
 [[ ${#tok} -ge 16 ]] && echo "  ok       companion token (${#tok} chars)" || { echo "  MISSING  companion token"; rc=1; }
 unset tok
 (( rc == 0 )) || exit 1
+
+if $INSTALL; then
+  ents=$(codesign -d --entitlements - $APP 2>&1)
+  for e in extended-virtual-addressing increased-memory-limit get-task-allow; do
+    grep -q $e <<< "$ents" && echo "  ok       entitlement $e" || { echo "  MISSING  entitlement $e"; exit 1; }
+  done
+  echo "==> installing on Arona"
+  xcrun devicectl device install app --device $UDID $APP 2>&1 | grep -E 'installed|App installed|error|Error' | head -3
+  exit 0
+fi
 
 echo "==> packaging"
 STAGE=$(mktemp -d $ROOT/build/stage.XXXXXX)
