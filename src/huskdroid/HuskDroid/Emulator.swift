@@ -23,10 +23,10 @@ final class Emulator: ObservableObject {
             // Android's servers get ports of their own, never ones the iPhone's apps use: LocalSend for iOS
             // holds 53317, so Android's LocalSend is set to 53318 and reached at the iPhone's address on it.
             "husk.portForwards": ["tcp:53318", "udp:53318"],
-            // Software display: Android draws on the CPU, so a save holds no GPU state and a restore
-            // resumes exactly where it was. In GPU mode every restore set off a full framework restart
-            // (~60 s of black) because the virgl state cannot be saved. Being measured against GPU mode.
-            "husk.gpuMode": false,
+            // GPU display. The software display was measured (build 569): restores would resume in place,
+            // but a cold boot took 2 min 47 s (GPU: ~60 s) and the launcher and system_server raised
+            // "isn't responding" dialogs under its load. The GPU's restore-then-restart is the better trade.
+            "husk.gpuMode": true,
         ])
         HuskLog.start()
         HuskLog.log("ui", AppVersion.display)
