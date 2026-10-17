@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
+import PhotosUI
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -242,12 +243,13 @@ struct ControlPanel: View {
     @ObservedObject private var emulator = Emulator.shared
     @ObservedObject private var companion = Companion.shared
     @ObservedObject private var runner = QemuRunner.shared
+    @ObservedObject private var transfers = Transfers.shared
     @State private var importing: ImportKind?
     @State private var showLogs = false
-    @State private var busy: String?
-    @State private var result: String?
+    @State private var showPhotos = false
+    @State private var photoItems: [PhotosPickerItem] = []
 
-    enum ImportKind: Identifiable { case apk, file; var id: Self { self } }
+    enum ImportKind: Identifiable { case apk, files; var id: Self { self } }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -257,13 +259,19 @@ struct ControlPanel: View {
             Divider()
             HStack(spacing: 10) {
                 panelButton("Install APK", "square.and.arrow.down") { importing = .apk }
-                panelButton("Send File", "doc.badge.arrow.up") { importing = .file }
+                Menu {
+                    Button { showPhotos = true } label: { Label("Photos & Videos", systemImage: "photo.on.rectangle") }
+                    Button { importing = .files } label: { Label("Files", systemImage: "folder") }
+                } label: {
+                    panelLabel("Send to Android", "square.and.arrow.up.on.square")
+                }
+                .buttonStyle(.plain)
                 panelButton("Logs", "text.alignleft") { showLogs = true }
             }
-            if let busy {
+            if let busy = transfers.busy {
                 HStack(spacing: 8) { ProgressView(); Text(busy).font(.footnote) }
-            } else if let result {
-                Text(result).font(.footnote).foregroundStyle(.secondary).lineLimit(3)
+            } else if let result = transfers.result {
+                Text(result).font(.footnote).foregroundStyle(.secondary).lineLimit(4)
             }
             Text(AppVersion.display)
                 .font(.caption2.monospacedDigit()).foregroundStyle(.tertiary)
@@ -276,9 +284,25 @@ struct ControlPanel: View {
         .frame(maxWidth: 520)
         .fileImporter(isPresented: Binding(get: { importing != nil }, set: { if !$0 { importing = nil } }),
                       allowedContentTypes: importing == .apk ? [UTType("com.android.package-archive") ?? .data] : [.item],
-                      allowsMultipleSelection: false) { picked in
+                      allowsMultipleSelection: importing == .files) { picked in
             let kind = importing
-            if case let .success(urls) = picked, let url = urls.first, let kind { bring(url, as: kind) }
+            guard case let .success(urls) = picked else { return }
+            transfers.send(urls, securityScoped: true, install: kind == .apk)
+        }
+        // Compatible encoding: JPEG and H.264 rather than HEIC/HEVC, which not every Android app opens.
+        .photosPicker(isPresented: $showPhotos, selection: $photoItems, maxSelectionCount: 30,
+                      matching: .any(of: [.images, .videos]), preferredItemEncoding: .compatible)
+        .onChange(of: photoItems) { _, items in
+            guard !items.isEmpty else { return }
+            photoItems = []
+            Task {
+                var urls: [URL] = []
+                for item in items {
+                    if let picked = try? await item.loadTransferable(type: PickedMedia.self) { urls.append(picked.url) }
+                    else { HuskLog.log("files", "could not load a picked photo/video (\(item.supportedContentTypes.map(\.identifier)))") }
+                }
+                transfers.send(urls, securityScoped: false)
+            }
         }
         .sheet(isPresented: $showLogs) { LogsView() }
     }
@@ -339,15 +363,17 @@ struct ControlPanel: View {
     }
 
     private func panelButton(_ title: String, _ icon: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            VStack(spacing: 4) {
-                Image(systemName: icon).font(.title3)
-                Text(title).font(.caption2)
-            }
-            .frame(maxWidth: .infinity, minHeight: 54)
-            .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        Button(action: action) { panelLabel(title, icon) }
+            .buttonStyle(.plain)
+    }
+
+    private func panelLabel(_ title: String, _ icon: String) -> some View {
+        VStack(spacing: 4) {
+            Image(systemName: icon).font(.title3)
+            Text(title).font(.caption2).multilineTextAlignment(.center)
         }
-        .buttonStyle(.plain)
+        .frame(maxWidth: .infinity, minHeight: 54)
+        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 
     private var jitText: String {
@@ -376,36 +402,6 @@ struct ControlPanel: View {
         }
     }
 
-    /// Copy the picked file out of its security scope, then install or send it in the background.
-    private func bring(_ url: URL, as kind: ImportKind) {
-        guard emulator.started else { result = "Start Android first."; return }
-        let scoped = url.startAccessingSecurityScopedResource()
-        let local = FileManager.default.temporaryDirectory.appendingPathComponent(url.lastPathComponent)
-        try? FileManager.default.removeItem(at: local)
-        do { try FileManager.default.copyItem(at: url, to: local) } catch {
-            result = "Couldn't read \(url.lastPathComponent): \(error.localizedDescription)"
-            if scoped { url.stopAccessingSecurityScopedResource() }
-            return
-        }
-        if scoped { url.stopAccessingSecurityScopedResource() }
-        busy = kind == .apk ? "Installing \(local.lastPathComponent)…" : "Sending \(local.lastPathComponent)…"
-        result = nil
-        DispatchQueue.global(qos: .userInitiated).async {
-            let text: String
-            do {
-                if kind == .apk {
-                    let out = try AndroidFiles.install(local)
-                    text = out.contains("Success") ? "Installed \(local.lastPathComponent)." : "Install failed: \(out)"
-                } else {
-                    text = "Sent to \(try AndroidFiles.push(local, into: "/sdcard/Download"))"
-                }
-            } catch {
-                text = "Failed: \(error.localizedDescription)"
-            }
-            try? FileManager.default.removeItem(at: local)
-            DispatchQueue.main.async { busy = nil; result = text }
-        }
-    }
 }
 
 /// The app's own log, live: what the companion also receives.
@@ -457,5 +453,22 @@ struct LoadingRainbow: View {
             }
         }
         .ignoresSafeArea()
+    }
+}
+
+/// A photo or video from the Photos picker, as a file of its own (with its original name) in tmp.
+struct PickedMedia: Transferable {
+    let url: URL
+
+    static var transferRepresentation: some TransferRepresentation {
+        FileRepresentation(importedContentType: .movie) { received in try PickedMedia(copying: received.file) }
+        FileRepresentation(importedContentType: .image) { received in try PickedMedia(copying: received.file) }
+    }
+
+    init(copying file: URL) throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("picked-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        url = dir.appendingPathComponent(file.lastPathComponent)
+        try FileManager.default.copyItem(at: file, to: url)
     }
 }
