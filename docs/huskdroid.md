@@ -54,12 +54,18 @@ Tailscale without listening on the phone.
   `GET /v1/next` (long-poll for a command), `POST /v1/result/<id>`.
 - `huskctl` (on the Mac) → companion: `logs [-f]`, `shell CMD`, `status`,
   `start`, `stop`, `install APK`, `push FILE`, `key NAME`, `screenshot`, `jit`.
-- Bearer token, from the vault (`huskdroid.token`), baked into the app at build
-  time from an untracked xcconfig.
+- Bearer token, from the vault (`huskdroid.token`), handed to xcodebuild through
+  the environment by `src/huskdroid/build.sh` (never in a tracked file).
 - Listens on 8790. Addresses tried by the app: 192.168.1.127,
   100.64.0.10 (Tailscale).
 
-## Identity
+## Identity and signing
 
-`com.shrimpapplepro.huskdroid`, so it installs beside Husk. Android's image is
-downloaded again on first launch.
+`com.shrimpapplepro.huskdroid.<TEAM>`, Xcode-signed with the paid team and the
+extended-virtual-addressing and increased-memory-limit entitlements
+(`build.sh --install`). Sideloadly's signing drops both, which ran the address
+space out mid-boot.
+
+## Status
+
+See README.md (what changed from Husk, known limits) and AGENTS.md (setup).
