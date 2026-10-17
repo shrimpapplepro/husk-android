@@ -32,6 +32,7 @@ struct RootView: View {
                     .transition(.move(edge: .top).combined(with: .opacity))
             }
         }
+        .animation(.easeInOut(duration: 1.2), value: emulator.screenReady)
         .preferredColorScheme(.dark)
         .statusBarHidden()
         .persistentSystemOverlays(.hidden)
@@ -41,12 +42,21 @@ struct RootView: View {
 /// Android's own screen: the GL surface, or the software display if GL could not start.
 struct AndroidScreen: View {
     @ObservedObject private var runner = QemuRunner.shared
+    @ObservedObject private var emulator = Emulator.shared
 
     var body: some View {
         ZStack {
             HuskGLScreen()
             if runner.displayKind == .software {
                 HuskDisplay()
+            }
+            // While Android loads: a live rainbow, screen-blended over Android's picture, so wherever
+            // Android draws black the rainbow shows and whatever it draws bright stays on top.
+            if !emulator.screenReady {
+                LoadingRainbow()
+                    .blendMode(.screen)
+                    .allowsHitTesting(false)
+                    .transition(.opacity)
             }
             if runner.isSavingState {
                 VStack(spacing: 8) {
@@ -426,5 +436,22 @@ struct LogsView: View {
             }
         }
         .onAppear { lines = HuskLog.recentLines(600) }
+    }
+}
+
+/// The loading background: Rainbow.metal's huskRainbow, rendered live every frame.
+struct LoadingRainbow: View {
+    private let start = Date()
+
+    var body: some View {
+        TimelineView(.animation) { context in
+            GeometryReader { geo in
+                Rectangle()
+                    .colorEffect(ShaderLibrary.huskRainbow(
+                        .float(Float(context.date.timeIntervalSince(start))),
+                        .float2(geo.size)))
+            }
+        }
+        .ignoresSafeArea()
     }
 }
