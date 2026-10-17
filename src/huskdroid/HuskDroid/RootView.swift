@@ -293,8 +293,12 @@ struct ControlPanel: View {
             }
             row("apps.iphone", "Android", androidText) {
                 if emulator.started {
-                    Button("Save & Quit", role: .destructive) { emulator.saveAndQuit() }
-                        .disabled(runner.isSavingState)
+                    HStack(spacing: 6) {
+                        // Quit without saving: the next start comes back to the last save, storage included.
+                        Button("Quit") { emulator.quitWithoutSaving() }
+                        Button("Save & Quit", role: .destructive) { emulator.saveAndQuit() }
+                    }
+                    .disabled(runner.isSavingState)
                 } else {
                     Button("Start") { emulator.start(); close() }
                         .disabled(jit.phase != .on || emulator.needsDownload)

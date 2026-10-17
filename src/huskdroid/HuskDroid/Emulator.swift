@@ -20,7 +20,10 @@ final class Emulator: ObservableObject {
         UserDefaults.standard.register(defaults: [
             // Sound is a machine device: on from the first boot, so it never costs a second cold boot.
             "husk.sound": true,
-            "husk.autoSave": true,
+            // No automatic save. On the GPU display a save in a running session restarts Android's framework
+            // (stale GPU handles; ~1 min, touch dead) -- the first-boot save did exactly that. Save & Quit,
+            // which happens as you leave, is the only save, so a session is never interrupted.
+            "husk.autoSave": false,
             // virtio-snd stalls after the first sound; testing USB audio instead.
             "husk.soundDeviceKind": "usb",
             // Android's servers get ports of their own, never ones the iPhone's apps use: LocalSend for iOS
@@ -140,6 +143,14 @@ final class Emulator: ObservableObject {
         }
         thread.qualityOfService = .utility
         thread.start()
+    }
+
+    /// Quit without saving. The next start restores the last save, and its storage with it, so anything
+    /// changed since is gone; with no save yet, the next start is a cold boot.
+    func quitWithoutSaving() {
+        HuskLog.log("ui", "quitting without saving")
+        HuskLog.flushNow()
+        exit(0)
     }
 
     /// QEMU cannot be stopped and started again in one process, so stopping is: save the machine, then quit.
