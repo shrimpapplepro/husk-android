@@ -8,6 +8,7 @@ struct RootView: View {
     @ObservedObject private var emulator = Emulator.shared
     @ObservedObject private var runner = QemuRunner.shared
     @State private var panelOpen = false
+    @Namespace private var glass
 
     var body: some View {
         ZStack(alignment: .top) {
@@ -23,20 +24,36 @@ struct RootView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
 
-            StatusStrip(open: $panelOpen)
-                .padding(.top, 6)
-
             if panelOpen {
-                Color.black.opacity(0.35).ignoresSafeArea()
-                    .onTapGesture { withAnimation(.snappy) { panelOpen = false } }
-                ControlPanel(close: { withAnimation(.snappy) { panelOpen = false } })
-                    .transition(.move(edge: .top).combined(with: .opacity))
+                Color.black.opacity(0.25).ignoresSafeArea()
+                    .onTapGesture { toggle() }
+                    .transition(.opacity)
             }
+
+            // The pill and the panel are one piece of glass: opening morphs the pill into the panel.
+            GlassEffectContainer(spacing: 24) {
+                if panelOpen {
+                    ControlPanel(close: toggle)
+                        .glassEffect(.regular, in: .rect(cornerRadius: 30))
+                        .glassEffectID("chrome", in: glass)
+                        .padding(.horizontal, 10)
+                        .frame(maxWidth: 520)
+                } else {
+                    StatusStrip(open: panelOpen, toggle: toggle)
+                        .glassEffect(.regular.interactive(), in: .capsule)
+                        .glassEffectID("chrome", in: glass)
+                }
+            }
+            .padding(.top, 6)
         }
         .animation(.easeInOut(duration: 1.2), value: emulator.screenReady)
         .preferredColorScheme(.dark)
         .statusBarHidden()
         .persistentSystemOverlays(.hidden)
+    }
+
+    private func toggle() {
+        withAnimation(.bouncy(duration: 0.45)) { panelOpen.toggle() }
     }
 }
 
@@ -66,7 +83,7 @@ struct AndroidScreen: View {
                     Text("So it starts in seconds next time.").font(.caption).foregroundStyle(.secondary)
                 }
                 .padding(18)
-                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .glassEffect(.regular, in: .rect(cornerRadius: 22))
                 .allowsHitTesting(false)
             } else if runner.bootProgress > 0 && runner.bootProgress < 100 {
                 VStack(spacing: 8) {
@@ -75,7 +92,7 @@ struct AndroidScreen: View {
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 .padding(14)
-                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .glassEffect(.regular, in: .rect(cornerRadius: 20))
                 .allowsHitTesting(false)
             }
         }
@@ -84,16 +101,15 @@ struct AndroidScreen: View {
 
 /// The small pill at the top: what is on, and the way into the panel.
 struct StatusStrip: View {
-    @Binding var open: Bool
+    let open: Bool
+    let toggle: () -> Void
     @ObservedObject private var jit = JITFlow.shared
     @ObservedObject private var companion = Companion.shared
     @ObservedObject private var emulator = Emulator.shared
     @ObservedObject private var runner = QemuRunner.shared
 
     var body: some View {
-        Button {
-            withAnimation(.snappy) { open.toggle() }
-        } label: {
+        Button(action: toggle) {
             HStack(spacing: 10) {
                 dot(jitColor, "JIT")
                 dot(androidColor, "Android")
@@ -102,11 +118,11 @@ struct StatusStrip: View {
                     .font(.caption2.weight(.bold))
                     .foregroundStyle(.secondary)
             }
-            .padding(.horizontal, 12).padding(.vertical, 6)
-            .background(.ultraThinMaterial, in: Capsule())
+            .padding(.horizontal, 14).padding(.vertical, 8)
+            .contentShape(Capsule())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("Status and controls")
+        .accessibilityLabel(open ? "Close controls" : "Status and controls")
     }
 
     private func dot(_ color: Color, _ label: String) -> some View {
@@ -188,7 +204,7 @@ struct StartCard: View {
             } label: {
                 Label("Start Android", systemImage: "play.fill").frame(minWidth: 200)
             }
-            .buttonStyle(.borderedProminent).controlSize(.large)
+            .buttonStyle(.glassProminent).controlSize(.large)
         case .off, .failed:
             step(jitTitle, detail: jitDetail) {
                 Button("Turn On JIT") { jit.request() }
@@ -227,7 +243,7 @@ struct StartCard: View {
         VStack(spacing: 10) {
             Text(title).font(.headline)
             Text(detail).font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
-            button().buttonStyle(.borderedProminent).controlSize(.large)
+            button().buttonStyle(.glassProminent).controlSize(.large)
         }
     }
 
@@ -253,6 +269,8 @@ struct ControlPanel: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
+            StatusStrip(open: true, toggle: close)
+                .frame(maxWidth: .infinity)
             statusRows
             Divider()
             buttons
@@ -265,7 +283,8 @@ struct ControlPanel: View {
                 } label: {
                     panelLabel("Send to Android", "square.and.arrow.up.on.square")
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.glass)
+                .buttonBorderShape(.roundedRectangle(radius: 16))
                 panelButton("Logs", "text.alignleft") { showLogs = true }
             }
             if let busy = transfers.busy {
@@ -277,11 +296,7 @@ struct ControlPanel: View {
                 .font(.caption2.monospacedDigit()).foregroundStyle(.tertiary)
                 .frame(maxWidth: .infinity, alignment: .trailing)
         }
-        .padding(18)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
-        .padding(.horizontal, 12)
-        .padding(.top, 44)
-        .frame(maxWidth: 520)
+        .padding(.horizontal, 18).padding(.top, 6).padding(.bottom, 18)
         .fileImporter(isPresented: Binding(get: { importing != nil }, set: { if !$0 { importing = nil } }),
                       allowedContentTypes: importing == .apk ? [UTType("com.android.package-archive") ?? .data] : [.item],
                       allowsMultipleSelection: importing == .files) { picked in
@@ -330,27 +345,27 @@ struct ControlPanel: View {
     }
 
     private var buttons: some View {
-        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 8), spacing: 8) {
+        // A plain row, not a lazy grid: lazy items are laid out late and animated in from nowhere.
+        HStack(spacing: 6) {
             ForEach(SystemKey.allCases) { key in
                 Button { key.press() } label: { keyLabel(key.symbol) }
-                    .buttonStyle(.plain)
                     .accessibilityLabel(key.title)
             }
             Button { Rotation.toggle(); close() } label: {
                 keyLabel(Rotation.landscape ? "rectangle.portrait.rotate" : "rectangle.landscape.rotate")
             }
-            .buttonStyle(.plain)
             .accessibilityLabel(Rotation.landscape ? "Portrait" : "Landscape")
         }
+        .buttonStyle(.glass)
+        .buttonBorderShape(.roundedRectangle(radius: 12))
         .disabled(!emulator.started)
         .opacity(emulator.started ? 1 : 0.4)
     }
 
     private func keyLabel(_ symbol: String) -> some View {
         Image(systemName: symbol)
-            .font(.body.weight(.medium))
-            .frame(maxWidth: .infinity, minHeight: 40)
-            .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .font(.callout.weight(.medium))
+            .frame(maxWidth: .infinity, minHeight: 30)
     }
 
     private func row<Trailing: View>(_ icon: String, _ title: String, _ detail: String,
@@ -362,13 +377,14 @@ struct ControlPanel: View {
                 Text(detail).font(.caption).foregroundStyle(.secondary).lineLimit(2)
             }
             Spacer()
-            trailing().buttonStyle(.bordered).controlSize(.small)
+            trailing().buttonStyle(.glass).controlSize(.small)
         }
     }
 
     private func panelButton(_ title: String, _ icon: String, action: @escaping () -> Void) -> some View {
         Button(action: action) { panelLabel(title, icon) }
-            .buttonStyle(.plain)
+            .buttonStyle(.glass)
+            .buttonBorderShape(.roundedRectangle(radius: 16))
     }
 
     private func panelLabel(_ title: String, _ icon: String) -> some View {
@@ -376,8 +392,7 @@ struct ControlPanel: View {
             Image(systemName: icon).font(.title3)
             Text(title).font(.caption2).multilineTextAlignment(.center)
         }
-        .frame(maxWidth: .infinity, minHeight: 54)
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .frame(maxWidth: .infinity, minHeight: 50)
     }
 
     private var jitText: String {
