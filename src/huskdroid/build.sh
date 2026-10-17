@@ -19,9 +19,9 @@ export DEVELOPER_DIR=${DEVELOPER_DIR:-/Applications/Xcode-beta.app/Contents/Deve
 
 TEAM=ABCDE12345
 UDID=00000000-0000000000000000
-# The bundle id Sideloadly installed (its signing id carries a team suffix, the bundle id does not);
-# the same id with the same team installs over that app and keeps its data.
-BUNDLE=com.shrimpapplepro.huskdroid
+# The app's id since build 573, when it moved from Sideloadly to Xcode signing (Sideloadly's copy could
+# not be upgraded: iOS compares the signing id, and Sideloadly's carried a team suffix).
+BUNDLE=com.shrimpapplepro.huskdroid.$TEAM
 INSTALL=false
 [[ ${1:-} == --install ]] && { INSTALL=true; shift; }
 
