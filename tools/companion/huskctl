@@ -11,6 +11,7 @@
   huskctl push FILE [DIR]            copy a file into Android (default: Pictures/Music/Download by type)
   huskctl launch PACKAGE             open an Android app
   huskctl screenshot                 save Android's screen on this Mac, print the path
+  huskctl rotate [portrait|landscape] turn Android (toggles with no argument)
   huskctl adb [ARGS...]              adb against Android (tunnelled; e.g. huskctl adb shell, huskctl adb install x.apk)
   huskctl raw '{"type": ...}'        any command, as JSON
 """
@@ -104,6 +105,11 @@ def main(argv):
         return show(cmd(payload, wait=600))
     if op == "launch":
         return show(cmd({"type": "launch", "package": args[0]}))
+    if op == "rotate":
+        payload = {"type": "rotate"}
+        if args:
+            payload["landscape"] = args[0].startswith("land")
+        return show(cmd(payload))
     if op == "screenshot":
         return show(cmd({"type": "screenshot"}))
     if op == "adb":
