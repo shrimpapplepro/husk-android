@@ -75,7 +75,10 @@ final class Emulator: ObservableObject {
         DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + delay) {
             let r = try? GuestBridge.shared.run(
                 "am start -a android.intent.action.MAIN -c android.intent.category.HOME", timeout: 30)
-            HuskLog.log("ui", "after the save: home screen \(r?.status == 0 ? "reopened" : "NOT reopened (\(r?.out ?? "no bridge"))")")
+            // am prints "Starting: Intent ..." when it delivers the intent, even when its status is not 0
+            // (it reports the activity already on top as a warning).
+            let ok = r?.status == 0 || r?.out.contains("Starting: Intent") == true
+            HuskLog.log("ui", "after the save: home screen \(ok ? "reopened" : "NOT reopened (\(r?.out ?? "no bridge"))")")
         }
     }
 
