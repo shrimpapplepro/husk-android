@@ -186,9 +186,14 @@ final class QemuRunner: ObservableObject {
     /// What the saved machine's hardware looks like, for deciding whether a
     /// restore is even possible. Was just the display; sound joins it because
     /// it changes the same thing.
+    /// "virtio" (virtio-sound-pci) or "usb" (usb-audio). Part of the machine stamp, like the device itself.
+    nonisolated static var soundDeviceKind: String {
+        UserDefaults.standard.string(forKey: "husk.soundDeviceKind") ?? "virtio"
+    }
+
     nonisolated static var machineStamp: String {
         (glProven ? "gl" : "sw")
-            + (soundEnabled ? "+snd" : "")
+            + (soundEnabled ? (soundDeviceKind == "usb" ? "+usbsnd" : "+snd") : "")
             + (landscapeGuest ? "+land" : "")
             + (customResolution.map { "+\($0.w)x\($0.h)" } ?? "")
     }
@@ -1181,9 +1186,13 @@ final class QemuRunner: ObservableObject {
             // Conditional, because adding it changes the machine definition and
             // no snapshot taken without it can be restored into it.
             "-audiodev", "husk,id=huskaudio",
-        ] : []) + (QemuRunner.soundEnabled && QemuRunner.soundDeviceEnabled ? [
-            "-device", "virtio-sound-pci,audiodev=huskaudio",
-        ] : []) + [
+        ] : []) + (QemuRunner.soundEnabled && QemuRunner.soundDeviceEnabled ? (
+            // virtio-snd stalls after its first few buffers on this guest; usb-audio is the alternative
+            // (a USB Audio Class card the guest's snd-usb-audio drives).
+            QemuRunner.soundDeviceKind == "usb"
+                ? ["-device", "usb-audio,audiodev=huskaudio,bus=usb-bus.0"]
+                : ["-device", "virtio-sound-pci,audiodev=huskaudio"]
+        ) : []) + [
             "-chardev", "file,id=ser0,path=\(guestSerialLogPath)",
             "-serial", "chardev:ser0",
             "-display", "none",

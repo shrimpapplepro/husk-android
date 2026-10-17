@@ -16,6 +16,8 @@ final class Emulator: ObservableObject {
             // Sound is a machine device: on from the first boot, so it never costs a second cold boot.
             "husk.sound": true,
             "husk.autoSave": true,
+            // virtio-snd stalls after the first sound; testing USB audio instead.
+            "husk.soundDeviceKind": "usb",
         ])
         HuskLog.start()
         JITBootstrap.installTrapGuard()
