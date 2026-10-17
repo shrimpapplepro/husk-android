@@ -1,6 +1,6 @@
 """Wireless JIT for HuskDroid (and Husk): no cable, no lldb, no on-device VPN.
 
-Reaches the iPhone's lockdownd by IP (home Wi-Fi or its Tailscale address), opens the
+Reaches the iPhone's lockdownd by IP (HUSKDROID_PHONE_HOSTS, tried in order), opens the
 iOS 17+ developer tunnel in userspace (no root), and drives debugserver over gdb-remote
 the way Husk's husk-jit.js does under StikDebug:
   brk #0x69            -> x0 = 0xE0000069 (attach probe)
@@ -37,7 +37,7 @@ def _config():
 
 _CONFIG = _config()
 UDID = _CONFIG.get("HUSKDROID_UDID", "")
-HOSTS = [h.strip() for h in _CONFIG.get("HUSKDROID_PHONE_HOSTS", "").split(",") if h.strip()]  # Wi-Fi, then Tailscale
+HOSTS = [h.strip() for h in _CONFIG.get("HUSKDROID_PHONE_HOSTS", "").split(",") if h.strip()]
 PAIR_DIR = Path.home() / ".pymobiledevice3"
 DEBUGPROXY = "com.apple.internal.dt.remote.debugproxy"
 PAGE = 16384
@@ -186,7 +186,7 @@ async def pick_host(hosts=HOSTS):
     for h in hosts:
         if await reachable(h):
             return h
-    raise JitError(f"the phone is not reachable at {', '.join(hosts)} (Wi-Fi off / Tailscale disconnected?)")
+    raise JitError(f"the phone is not reachable at {', '.join(hosts)} (other network, changed address, or the route is down?)")
 
 
 async def pair_record(udid=UDID):

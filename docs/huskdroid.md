@@ -47,8 +47,8 @@ name and streams progress → app sees `CS_DEBUGGED`, claims its 512 MiB region
 
 ## Companion (`tools/companion/`, runs on himari)
 
-The phone always opens the connections, so it works on home Wi-Fi and over
-Tailscale without listening on the phone.
+The phone always opens the connections, so nothing listens on the phone; any
+network route between the two works (same Wi-Fi by default).
 
 - App → companion: `POST /v1/jit` (streamed), `POST /v1/logs` (batched lines),
   `GET /v1/next` (long-poll for a command), `POST /v1/result/<id>`.
@@ -57,7 +57,7 @@ Tailscale without listening on the phone.
 - Bearer token, from the vault (`huskdroid.token`), handed to xcodebuild through
   the environment by `src/huskdroid/build.sh` (never in a tracked file).
 - Listens on 8790 (and 8791 for tunnels). The app tries the addresses in
-  `HUSKDROID_MAC_HOSTS` (config/local.env) in order: Wi-Fi, then Tailscale.
+  `HUSKDROID_MAC_HOSTS` (config/local.env) in order.
 
 ## Identity and signing
 
