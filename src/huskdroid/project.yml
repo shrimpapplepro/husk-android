@@ -1,0 +1,87 @@
+name: HuskDroid
+options:
+  bundleIdPrefix: com.shrimpapplepro
+  deploymentTarget:
+    iOS: "17.0"
+  createIntermediateGroups: true
+
+settings:
+  base:
+    ARCHS: arm64
+    ONLY_ACTIVE_ARCH: YES
+    ENABLE_BITCODE: NO
+    SWIFT_VERSION: "5.0"
+    # The display loop and the JIT path are timing-sensitive; a debug build misleads.
+    SWIFT_OPTIMIZATION_LEVEL: "-O"
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+
+targets:
+  HuskDroid:
+    type: application
+    platform: iOS
+    sources:
+      # The new app: every screen, the companion link, JIT flow, buttons, files, logs.
+      - path: HuskDroid
+        excludes:
+          - "Info.plist"
+          - "HuskDroid.entitlements"
+      # The emulator engine, shared with Husk's sources rather than copied, so upstream fixes merge.
+      - path: ../app/Husk/QemuRunner.swift
+      - path: ../app/Husk/GuestImage.swift
+      - path: ../app/Husk/GuestManifest.swift
+      - path: ../app/Husk/HuskBridgeFS.swift
+      - path: ../app/Husk/HuskLog.swift
+      - path: ../app/Husk/HuskGLView.swift
+      - path: ../app/Husk/HuskMetalView.swift
+      - path: ../app/Husk/HuskMetalPresenter.swift
+      - path: ../app/Husk/HuskAudio.swift
+      - path: ../app/Husk/ApkMetadata.swift
+      - path: ../app/Husk/Shaders.metal
+    settings:
+      base:
+        PRODUCT_NAME: HuskDroid
+        PRODUCT_BUNDLE_IDENTIFIER: com.shrimpapplepro.huskdroid
+        INFOPLIST_FILE: HuskDroid/Info.plist
+        CODE_SIGN_ENTITLEMENTS: HuskDroid/HuskDroid.entitlements
+        CODE_SIGN_STYLE: Automatic
+        SWIFT_OBJC_BRIDGING_HEADER: HuskDroid/HuskDroidBridge.h
+        TARGETED_DEVICE_FAMILY: "1"
+        LD_RUNPATH_SEARCH_PATHS:
+          - "$(inherited)"
+          - "@executable_path/Frameworks"
+        LIBRARY_SEARCH_PATHS:
+          - "$(inherited)"
+          - "$(SRCROOT)/../../build/ios-arm64/lib"
+        # The token is not in any file: the build script exports it from the vault.
+        HUSKDROID_TOKEN: "$(HUSKDROID_TOKEN)"
+    dependencies:
+      - framework: ../../build/ios-arm64/lib/libqemu-aarch64-softmmu.dylib
+        embed: true
+        codeSign: true
+      # QEMU dlopens ANGLE by @rpath when GL starts; embedded, not linked.
+      - framework: ../../build/ios-arm64/sysroot/lib/libANGLE-shared.dylib
+        embed: true
+        codeSign: true
+        link: false
+    preBuildScripts:
+      - name: Stage firmware and disk seeds
+        script: |
+          set -e
+          OUT="$BUILT_PRODUCTS_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH"
+          BIOS="$SRCROOT/../../third_party/build/qemu-10.0.12-utm/pc-bios"
+          mkdir -p "$OUT/pc-bios"
+          # -M virt asks only for the network boot ROMs.
+          cp "$BIOS"/efi-*.rom "$OUT/pc-bios/" 2>/dev/null || true
+          # UEFI firmware for Android's GRUB; 64 MiB of mostly zeros, which the IPA's zip squeezes.
+          [ -f "$OUT/edk2-aarch64-code.fd" ] || bunzip2 -c "$BIOS/edk2-aarch64-code.fd.bz2" > "$OUT/edk2-aarch64-code.fd"
+          # Tiny sparse seeds the app copies into Documents on first launch.
+          QEMU_IMG="$(command -v qemu-img || echo /opt/homebrew/bin/qemu-img)"
+          rm -f "$OUT/lineage-efi-vars-seed.fd" "$OUT/lineage-vdb-seed.qcow2"
+          "$QEMU_IMG" create -q -f qcow2 "$OUT/lineage-efi-vars-seed.fd" 64M
+          "$QEMU_IMG" create -q -f qcow2 "$OUT/lineage-vdb-seed.qcow2" 16G
+        basedOnDependencyAnalysis: false
+        outputFiles:
+          - "$(BUILT_PRODUCTS_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/edk2-aarch64-code.fd"
+          - "$(BUILT_PRODUCTS_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/lineage-efi-vars-seed.fd"
+          - "$(BUILT_PRODUCTS_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/lineage-vdb-seed.qcow2"
