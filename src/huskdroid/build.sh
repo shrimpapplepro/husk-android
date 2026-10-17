@@ -1,6 +1,6 @@
 #!/bin/zsh
 # Build HuskDroid.ipa for sideloading.
-#   src/huskdroid/build.sh [OUT.ipa]      (default ~/Desktop/HuskDroid.ipa)
+#   src/huskdroid/build.sh [OUT.ipa]      (default ~/Desktop/HuskDroid-VERSION-(BUILD).ipa)
 # The companion token is read from the vault and handed to xcodebuild through the environment,
 # so it is never on a command line or in a tracked file.
 set -eu
