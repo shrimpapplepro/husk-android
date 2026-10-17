@@ -20,8 +20,9 @@ final class Emulator: ObservableObject {
             "husk.autoSave": true,
             // virtio-snd stalls after the first sound; testing USB audio instead.
             "husk.soundDeviceKind": "usb",
-            // LocalSend: its HTTP(S) server and discovery port, reachable at the iPhone's address.
-            "husk.portForwards": ["tcp:53317", "udp:53317"],
+            // Android's servers get ports of their own, never ones the iPhone's apps use: LocalSend for iOS
+            // holds 53317, so Android's LocalSend is set to 53318 and reached at the iPhone's address on it.
+            "husk.portForwards": ["tcp:53318", "udp:53318"],
         ])
         HuskLog.start()
         HuskLog.log("ui", AppVersion.display)
