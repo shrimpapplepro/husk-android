@@ -14,7 +14,8 @@ Husk's emulator engine and replaces everything around it. Husk's own README is k
 - **Android, full screen.** LineageOS on a virtual GPU (virtio-gpu-gl through virglrenderer and ANGLE to
   Metal), 360×672 at 160 dpi, 4 GiB of RAM, 4 cores. Touch, keyboard, and Android's system buttons.
 - **JIT without a cable, a VPN or StikDebug.** The app asks a companion on your Mac; the companion
-  reaches the iPhone over Wi-Fi or Tailscale and services the JIT request in about 2 seconds.
+  reaches the iPhone over the network (same Wi-Fi, or any route between the two) and services the
+  JIT request in about 2 seconds.
 - **Sound.** Android's audio plays on the iPhone.
 - **Snapshots.** Save & Quit stores the whole machine; the next start restores it instead of booting
   (~45 s until the screen is back, against ~60 s to 2 min for a cold boot).
@@ -33,7 +34,7 @@ Android under QEMU. HuskDroid keeps only the second, and fixes what that left br
 | Area | Husk | HuskDroid |
 |---|---|---|
 | App | Library, translation layer, PS4 layer, Discover, StikJIT | A new emulator-first app (`src/huskdroid`); only the engine is shared |
-| JIT | StikDebug, built-in StikJIT, TrollStore; all need LocalDevVPN | A companion on the Mac grants it over Wi-Fi/Tailscale (`huskjit_core.py`): lockdown over TCP, a no-root userspace tunnel, debugserver over gdb-remote |
+| JIT | StikDebug, built-in StikJIT, TrollStore; all need LocalDevVPN | A companion on the Mac grants it over the network (`huskjit_core.py`): lockdown over TCP, a no-root userspace tunnel, debugserver over gdb-remote |
 | Sound | Off by default; virtio-sound stalls after the first sound | USB audio, hot-plugged after boot/restore and unplugged around every save |
 | Snapshots | A locally saved machine never restored (size bug); every save closed all apps | Fixed restore; saving only on Save & Quit; home screen reopened; updates save first |
 | Memory | 5 GiB guest | 4 GiB cap (`husk.maxGuestMiB`), since some signers drop extended VA |

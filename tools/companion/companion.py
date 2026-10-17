@@ -1,6 +1,6 @@
 """HuskDroid companion: JIT on request, the app's live logs, and a command queue.
 
-The phone opens every connection (home Wi-Fi or Tailscale), so nothing listens on it.
+The phone opens every connection (same Wi-Fi or any route to the Mac), so nothing listens on it.
 
   app  -> POST /v1/hello              {device, app, state}          note who is connected
        -> POST /v1/jit                {name}                        streamed progress, last line OK/ERROR

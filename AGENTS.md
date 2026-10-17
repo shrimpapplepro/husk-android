@@ -14,9 +14,32 @@ cp config/local.env.example config/local.env
 | Variable | What | How to find it |
 |---|---|---|
 | `HUSKDROID_UDID` | The iPhone | `xcrun devicectl list devices` |
-| `HUSKDROID_PHONE_HOSTS` | The iPhone's addresses, tried in order (Wi-Fi, Tailscale) | `ideviceinfo -n -k WiFiAddress` + `arp -a`, `tailscale status` |
-| `HUSKDROID_MAC_HOSTS` | `host:8790` of this Mac, tried in order | `ipconfig getifaddr en0`, `tailscale ip -4` |
+| `HUSKDROID_PHONE_HOSTS` | The iPhone's addresses, tried in order | see *Network* below |
+| `HUSKDROID_MAC_HOSTS` | `host:8790` of this Mac, tried in order | see *Network* below |
 | `HUSKDROID_TEAM` | Paid developer team that signs the app | the team id of a paid account in Xcode |
+
+### Network
+
+Two connections must work, and both are plain TCP:
+
+- **Mac → iPhone, port 62078** (lockdownd), for JIT. Test: `nc -z -G 3 <iphone> 62078`.
+- **iPhone → Mac, ports 8790 and 8791** (companion and tunnels), for JIT requests, logs and adb.
+  Test from the Mac: `curl -s -o /dev/null -w '%{http_code}\n' http://<mac>:8790/v1/status` gives `401`;
+  the app's status pill shows Mac green once it gets through.
+
+**Start with the same Wi-Fi.** It needs nothing else:
+
+- The iPhone's address: `ideviceinfo -n -k WiFiAddress` gives its hardware address; find that in
+  `arp -a` (or the router's client list). `dns-sd -B _apple-mobdev2._tcp` confirms it is on the network.
+- The Mac's address: `ipconfig getifaddr en0` (or `en1`), plus `:8790`.
+- Addresses from DHCP can change: reserve both on the router, or the setup breaks when a lease renews.
+
+**Away from that Wi-Fi**, any route that carries both connections works. Work out what this user's
+setup can actually do and add those addresses after the Wi-Fi ones (each list is tried in order). A
+mesh VPN both devices are on (Tailscale, ZeroTier, WireGuard) is the usual answer; use the tests above to
+keep only addresses that really connect. Do not open these ports to the internet with port forwarding:
+lockdownd and the companion would face the whole internet, with the token as the companion's only
+protection. If no route exists, JIT works on the home Wi-Fi only; tell the user so.
 
 `build.sh` reads it (the Mac hosts go into the app's Info.plist); `tools/companion/install.sh` copies it to
 `~/.config/huskdroid/config.env`, where the companion reads the iPhone values. Also machine-specific:
@@ -117,7 +140,7 @@ first save exists. Later starts log `restored a saved machine` and the screen is
 
 | Symptom | Cause and fix |
 |---|---|
-| `[jit] ERROR: the phone is not reachable` | iPhone off Wi-Fi and Tailscale disconnected; fix the network, or `HUSKDROID_PHONE_HOSTS` |
+| `[jit] ERROR: the phone is not reachable` | No address in `HUSKDROID_PHONE_HOSTS` answers on 62078: the iPhone is on another network, its address changed, or the route (VPN) is down |
 | `no pair record` | Plug the iPhone in once and Trust; the record is copied to `~/.pymobiledevice3` |
 | JIT attaches but `get_service_port` fails | Developer Disk Image not mounted (after a reboot): `devicectl device info ddiServices` |
 | App closes instantly in `qemu_init` | A port forward could not bind (fixed: busy ports are skipped); check `husk.portForwards` |
