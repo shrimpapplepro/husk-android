@@ -67,6 +67,19 @@ if $INSTALL; then
   for e in extended-virtual-addressing increased-memory-limit get-task-allow; do
     grep -q $e <<< "$ents" && echo "  ok       entitlement $e" || { echo "  MISSING  entitlement $e"; exit 1; }
   done
+  # An update must never cost a session: if HuskDroid is open, have it Save & Quit, and wait for it to go.
+  if pgrep -qf 'huskdroid/companion.py' && $HOME/.local/bin/huskctl status 2>/dev/null | grep -q '"seconds_since_seen": [0-9]\{1,2\}\.'; then
+    echo "==> HuskDroid is open: saving and closing it first"
+    $HOME/.local/bin/huskctl stop >/dev/null 2>&1 || true
+  fi
+  for i in {1..60}; do
+    xcrun devicectl device info processes --device $UDID 2>/dev/null | grep -q 'HuskDroid.app/HuskDroid' || break
+    (( i == 1 )) && echo "==> waiting for HuskDroid to finish saving"
+    sleep 3
+  done
+  if xcrun devicectl device info processes --device $UDID 2>/dev/null | grep -q 'HuskDroid.app/HuskDroid'; then
+    echo "HuskDroid is still running after 3 minutes; not installing over it"; exit 1
+  fi
   echo "==> installing on Arona"
   xcrun devicectl device install app --device $UDID $APP 2>&1 | grep -E 'installed|App installed|error|Error' | head -3
   exit 0
