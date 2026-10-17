@@ -215,6 +215,14 @@ enum RemoteCommands {
                 let pkg = cmd["package"] as? String ?? ""
                 let r = try GuestBridge.shared.run("monkey -p \(AndroidHost.quote(pkg)) -c android.intent.category.LAUNCHER 1", timeout: 30)
                 return json(["ok": r.status == 0, "output": r.out])
+            case "tunnel":
+                let (host, token) = await MainActor.run { (Companion.shared.host, Companion.shared.tunnelToken) }
+                guard let host, let session = cmd["session"] as? String,
+                      let guestPort = cmd["guestPort"] as? Int, let tunnelPort = cmd["tunnelPort"] as? Int else {
+                    return json(["ok": false, "error": "bad tunnel request"])
+                }
+                Tunnel.open(session: session, host: host, tunnelPort: tunnelPort, guestPort: guestPort, token: token)
+                return json(["ok": true])
             case "screenshot":
                 let png = try GuestBridge.shared.pull("screencap -p", timeout: 30)
                 return Reply(body: png, type: "image/png")

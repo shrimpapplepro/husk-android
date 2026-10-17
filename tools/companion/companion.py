@@ -282,12 +282,118 @@ class Handler(BaseHTTPRequestHandler):
             pass
 
 
+class Tunnels:
+    """TCP from a client on this Mac to a port inside Android, through the app.
+
+    `adb connect 127.0.0.1:15555` -> this Mac's 15555 -> a "tunnel" command for the app -> the app dials
+    back to TUNNEL_PORT with the session id and token, connects to Android's adbd, and both sides pipe.
+    The phone opens every connection, as with everything else here.
+    """
+
+    LOCAL = {15555: 5555}   # this Mac's port -> the guest port it reaches
+    TUNNEL_PORT = 8791
+
+    def __init__(self):
+        self.waiting = {}
+        self.cond = threading.Condition()
+        self.ids = itertools.count(1)
+
+    def start(self):
+        for local, guest in self.LOCAL.items():
+            threading.Thread(target=self._listen_local, args=(local, guest), daemon=True).start()
+        threading.Thread(target=self._listen_app, daemon=True).start()
+
+    @staticmethod
+    def _server(host, port):
+        import socket
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        s.bind((host, port))
+        s.listen(16)
+        return s
+
+    def _listen_local(self, local, guest):
+        srv = self._server("127.0.0.1", local)
+        LOGS.add("companion", f"tunnel: 127.0.0.1:{local} reaches Android's {guest}")
+        while True:
+            client, _ = srv.accept()
+            threading.Thread(target=self._open, args=(client, guest), daemon=True).start()
+
+    def _open(self, client, guest):
+        sid = f"t{next(self.ids)}"
+        cid = COMMANDS.put({"type": "tunnel", "session": sid, "guestPort": guest, "tunnelPort": self.TUNNEL_PORT})
+        with self.cond:
+            self.cond.wait_for(lambda: sid in self.waiting, 20)
+            app = self.waiting.pop(sid, None)
+        COMMANDS.wait_result(cid, 0)  # its result is not needed; drop it
+        if app is None:
+            LOGS.add("companion", f"tunnel {sid}: the app did not dial back")
+            client.close()
+            return
+        LOGS.add("companion", f"tunnel {sid}: open to Android's {guest}")
+        self._pipe(client, app, sid)
+
+    def _listen_app(self):
+        srv = self._server("0.0.0.0", self.TUNNEL_PORT)
+        while True:
+            conn, addr = srv.accept()
+            threading.Thread(target=self._hello, args=(conn,), daemon=True).start()
+
+    def _hello(self, conn):
+        conn.settimeout(10)
+        line = b""
+        try:
+            while not line.endswith(b"\n") and len(line) < 512:
+                chunk = conn.recv(1)
+                if not chunk:
+                    break
+                line += chunk
+        except OSError:
+            pass
+        parts = line.decode("latin-1").split()
+        if len(parts) != 2 or not TOKEN or not hmac.compare_digest(parts[1], TOKEN):
+            conn.close()
+            return
+        conn.settimeout(None)
+        with self.cond:
+            self.waiting[parts[0]] = conn
+            self.cond.notify_all()
+
+    @staticmethod
+    def _pipe(a, b, sid):
+        import socket
+
+        def one_way(src, dst):
+            try:
+                while True:
+                    data = src.recv(65536)
+                    if not data:
+                        break
+                    dst.sendall(data)
+            except OSError:
+                pass
+            for s in (src, dst):
+                try:
+                    s.shutdown(socket.SHUT_RDWR)
+                except OSError:
+                    pass
+
+        t = threading.Thread(target=one_way, args=(b, a), daemon=True)
+        t.start()
+        one_way(a, b)
+        t.join()
+        a.close()
+        b.close()
+        LOGS.add("companion", f"tunnel {sid}: closed")
+
+
 def main():
     if not TOKEN:
         sys.exit("no token: run under `perlica-secret run huskdroid.token -- ...`")
     DATA.mkdir(parents=True, exist_ok=True)
     server = ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
     server.daemon_threads = True
+    Tunnels().start()
     LOGS.add("companion", f"listening on :{PORT}")
     server.serve_forever()
 
