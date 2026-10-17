@@ -1189,9 +1189,9 @@ final class QemuRunner: ObservableObject {
         ] : []) + (QemuRunner.soundEnabled && QemuRunner.soundDeviceEnabled ? (
             // virtio-snd stalls after its first few buffers on this guest; usb-audio is the alternative
             // (a USB Audio Class card the guest's snd-usb-audio drives).
-            QemuRunner.soundDeviceKind == "usb"
-                ? ["-device", "usb-audio,audiodev=huskaudio,bus=usb-bus.0"]
-                : ["-device", "virtio-sound-pci,audiodev=huskaudio"]
+            // usb-audio is never on the command line: husk_sound_attach() plugs it in once the machine
+            // is booted or restored, and the save path unplugs it around each save (husk-snapshot.c).
+            QemuRunner.soundDeviceKind == "usb" ? [] : ["-device", "virtio-sound-pci,audiodev=huskaudio"]
         ) : []) + [
             "-chardev", "file,id=ser0,path=\(guestSerialLogPath)",
             "-serial", "chardev:ser0",
@@ -1538,6 +1538,10 @@ final class QemuRunner: ObservableObject {
         }
 
         startMemoryWatch()
+
+        if QemuRunner.soundEnabled && QemuRunner.soundDeviceEnabled && QemuRunner.soundDeviceKind == "usb" {
+            HuskLog.log("qemu", husk_sound_attach() ? "USB sound card plugged in" : "USB sound card FAILED to plug in")
+        }
 
         HuskLog.log("qemu", "entering qemu_main_loop() -- this does not return until shutdown")
         qemu_main_loop()

@@ -31,6 +31,11 @@
 #include "migration/snapshot.h"
 #include "system/runstate.h"
 
+#include "hw/qdev-core.h"
+#include "hw/sysbus.h"
+#include "monitor/qdev.h"
+#include "qobject/qdict.h"
+
 #include "husk-snapshot.h"
 
 #define HUSK_SNAPSHOT_NAME "husk-ready"
@@ -79,10 +84,78 @@ static void husk_report(bool ok, const char *what, Error *err)
     }
 }
 
+/*
+ * HuskDroid: the sound card is a USB device plugged in at run time, never part of a saved machine.
+ *
+ * Both sound devices this guest can drive refuse to be saved (virtio-sound and usb-audio are
+ * .unmigratable), and virtio-sound also stalls after its first few buffers. usb-audio plays
+ * properly, and a USB device can be pulled and put back without the guest's help -- to Android it
+ * is a USB headset unplugged for the moment of the save. So it is never on the command line: it is
+ * attached once the machine is booted or restored, and detached around every save.
+ */
+#define HUSK_SOUND_ID "husksnd"
+static bool husk_sound_wanted;
+
+static DeviceState *husk_sound_device(void)
+{
+    return qdev_find_recursive(sysbus_get_default(), HUSK_SOUND_ID);
+}
+
+static bool husk_sound_plug(void)
+{
+    Error *err = NULL;
+    QDict *opts;
+    DeviceState *dev;
+
+    if (husk_sound_device()) {
+        return true;
+    }
+    opts = qdict_new();
+    qdict_put_str(opts, "driver", "usb-audio");
+    qdict_put_str(opts, "audiodev", "huskaudio");
+    qdict_put_str(opts, "bus", "usb-bus.0");
+    qdict_put_str(opts, "id", HUSK_SOUND_ID);
+    dev = qdev_device_add_from_qdict(opts, false, &err);
+    qobject_unref(opts);
+    if (!dev) {
+        fprintf(stderr, "[husk-snd] attaching the USB sound card FAILED: %s\n",
+                err ? error_get_pretty(err) : "?");
+        error_free(err);
+        return false;
+    }
+    object_unref(OBJECT(dev));
+    fprintf(stderr, "[husk-snd] USB sound card attached\n");
+    return true;
+}
+
+static void husk_sound_unplug(void)
+{
+    Error *err = NULL;
+    DeviceState *dev = husk_sound_device();
+
+    if (!dev) {
+        return;
+    }
+    qdev_unplug(dev, &err);
+    fprintf(stderr, "[husk-snd] USB sound card detached%s%s\n",
+            err ? ": " : "", err ? error_get_pretty(err) : "");
+    error_free(err);
+}
+
+bool husk_sound_attach(void)
+{
+    husk_sound_wanted = true;
+    return husk_sound_plug();
+}
+
 static void husk_save_bh(void *opaque)
 {
     Error *err = NULL;
     bool ok;
+
+    if (husk_sound_wanted) {
+        husk_sound_unplug();
+    }
 
     /*
      * No bql_lock() here. A bottom half on the main AIO context already runs
@@ -100,6 +173,9 @@ static void husk_save_bh(void *opaque)
     ok = save_snapshot(HUSK_SNAPSHOT_NAME, true, HUSK_VMSTATE_NODE,
                        true, &husk_snapshot_devices, &err);
 
+    if (husk_sound_wanted) {
+        husk_sound_plug();
+    }
     husk_report(ok, "save", err);
     error_free(err);
 }
