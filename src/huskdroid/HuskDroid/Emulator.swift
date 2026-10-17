@@ -2,6 +2,7 @@
 import Combine
 import Foundation
 import UIKit
+import UniformTypeIdentifiers
 
 /// Android's machine, as the UI sees it: download it, start it (once JIT is on), save and stop it.
 @MainActor
@@ -277,7 +278,7 @@ enum RemoteCommands {
                     let out = try AndroidFiles.install(local)
                     return json(["ok": out.contains("Success"), "output": out])
                 }
-                let dest = try AndroidFiles.push(local, into: cmd["dir"] as? String ?? "/sdcard/Download")
+                let dest = try AndroidFiles.push(local, into: cmd["dir"] as? String)
                 return json(["ok": true, "output": dest])
             case "launch":
                 let pkg = cmd["package"] as? String ?? ""
@@ -312,10 +313,12 @@ enum RemoteCommands {
     }
 }
 
-/// Putting things into Android: APKs installed with pm, other files copied into a folder.
+/// Putting things into Android: APKs installed with pm, other files copied into a folder by type and
+/// registered with Android's media library, so Gallery and Files see them at once.
 enum AndroidFiles {
     static func install(_ apk: URL) throws -> String {
         let remote = "/data/local/tmp/huskdroid-install.apk"
+        HuskLog.log("files", "install \(apk.lastPathComponent): pushing")
         try GuestBridge.shared.push(apk, to: remote) { _ in }
         defer { _ = try? GuestBridge.shared.run("rm -f \(remote)", timeout: 10) }
         let r = try GuestBridge.shared.run("pm install -r -t \(remote)", timeout: 600)
@@ -323,13 +326,91 @@ enum AndroidFiles {
         return r.out
     }
 
-    static func push(_ file: URL, into dir: String) throws -> String {
-        let dest = "\(dir)/\(file.lastPathComponent)"
+    /// Where a file of this kind belongs in Android's shared storage.
+    static func folder(for file: URL) -> String {
+        let type = UTType(filenameExtension: file.pathExtension.lowercased())
+        if type?.conforms(to: .image) == true || type?.conforms(to: .movie) == true { return "/sdcard/Pictures" }
+        if type?.conforms(to: .audio) == true { return "/sdcard/Music" }
+        return "/sdcard/Download"
+    }
+
+    @discardableResult
+    static func push(_ file: URL, into dir: String? = nil) throws -> String {
+        let dest = "\(dir ?? folder(for: file))/\(file.lastPathComponent)"
+        HuskLog.log("files", "sending \(file.lastPathComponent) (\(fileSize(file)) bytes) to \(dest)")
         try GuestBridge.shared.push(file, to: dest) { _ in }
-        // Make it show up in Android's file pickers and gallery.
-        _ = try? GuestBridge.shared.run("am broadcast -a android.intent.action.MEDIA_SCANNER_SCAN_FILE -d file://\(AndroidHost.quote(dest))", timeout: 15)
-        HuskLog.log("files", "copied \(file.lastPathComponent) to \(dest)")
+        // MediaProvider's scan_file: the legacy MEDIA_SCANNER broadcast is ignored on this Android.
+        let scan = try? GuestBridge.shared.run(
+            "content call --uri content://media --method scan_file --arg \(AndroidHost.quote(dest))", timeout: 30)
+        HuskLog.log("files", "sent \(file.lastPathComponent); media scan \(scan?.out.contains("Result") == true ? "ok" : "skipped")")
         return dest
+    }
+
+    private static func fileSize(_ url: URL) -> Int {
+        (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int) ?? 0
+    }
+}
+
+/// Files and apps on their way into Android, with progress that outlives the panel.
+@MainActor
+final class Transfers: ObservableObject {
+    static let shared = Transfers()
+
+    @Published private(set) var busy: String?
+    @Published private(set) var result: String?
+
+    /// Copy picked files out of their security scope (Files) or take them as already-local (Photos),
+    /// then send or install them one by one in the background.
+    func send(_ urls: [URL], securityScoped: Bool, install: Bool = false) {
+        guard Emulator.shared.started else { result = "Start Android first."; return }
+        guard !urls.isEmpty else { return }
+        var locals: [URL] = []
+        for url in urls {
+            let scoped = securityScoped && url.startAccessingSecurityScopedResource()
+            defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+            let local = FileManager.default.temporaryDirectory.appendingPathComponent(url.lastPathComponent)
+            try? FileManager.default.removeItem(at: local)
+            do {
+                try FileManager.default.copyItem(at: url, to: local)
+                locals.append(local)
+            } catch {
+                HuskLog.log("files", "could not read \(url.lastPathComponent): \(error.localizedDescription)")
+            }
+            if !securityScoped { try? FileManager.default.removeItem(at: url) }
+        }
+        guard !locals.isEmpty else { result = "Couldn't read the picked file."; return }
+        result = nil
+        busy = install ? "Installing \(locals[0].lastPathComponent)…" : "Sending \(locals.count) file\(locals.count == 1 ? "" : "s")…"
+        DispatchQueue.global(qos: .userInitiated).async {
+            var sent: [String] = [], failed: [String] = []
+            for (i, local) in locals.enumerated() {
+                Task { @MainActor in
+                    if locals.count > 1 { self.busy = "Sending \(i + 1) of \(locals.count)…" }
+                }
+                do {
+                    if install {
+                        let out = try AndroidFiles.install(local)
+                        out.contains("Success") ? sent.append(local.lastPathComponent) : failed.append(local.lastPathComponent)
+                    } else {
+                        sent.append(try AndroidFiles.push(local))
+                    }
+                } catch {
+                    HuskLog.log("files", "FAILED \(local.lastPathComponent): \(error.localizedDescription)")
+                    failed.append(local.lastPathComponent)
+                }
+                try? FileManager.default.removeItem(at: local)
+            }
+            let text: String
+            if install {
+                text = failed.isEmpty ? "Installed \(sent.first ?? "the app"). It's in Android's app list."
+                                      : "Install failed: \(failed.joined(separator: ", ")). See Logs."
+            } else {
+                let folders = Set(sent.map { ($0 as NSString).deletingLastPathComponent.replacingOccurrences(of: "/sdcard/", with: "") })
+                text = (sent.isEmpty ? "" : "Sent \(sent.count) to Android › \(folders.sorted().joined(separator: ", ")). Open Files or Gallery in Android.")
+                     + (failed.isEmpty ? "" : " Failed: \(failed.joined(separator: ", ")).")
+            }
+            Task { @MainActor in self.busy = nil; self.result = text }
+        }
     }
 }
 

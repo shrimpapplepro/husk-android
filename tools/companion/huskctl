@@ -8,7 +8,7 @@
   huskctl start | stop               start / stop Android
   huskctl key NAME                   volup voldown mute power back home recents
   huskctl install FILE.apk           install an APK into Android
-  huskctl push FILE [DIR]            copy a file into Android (default /sdcard/Download)
+  huskctl push FILE [DIR]            copy a file into Android (default: Pictures/Music/Download by type)
   huskctl launch PACKAGE             open an Android app
   huskctl screenshot                 save Android's screen on this Mac, print the path
   huskctl adb [ARGS...]              adb against Android (tunnelled; e.g. huskctl adb shell, huskctl adb install x.apk)
@@ -98,8 +98,10 @@ def main(argv):
     if op == "install":
         return show(cmd({"type": "install", "file": stage(args[0])}, wait=600))
     if op == "push":
-        dest = args[1] if len(args) > 1 else "/sdcard/Download"
-        return show(cmd({"type": "push", "file": stage(args[0]), "dir": dest}, wait=600))
+        payload = {"type": "push", "file": stage(args[0])}
+        if len(args) > 1:
+            payload["dir"] = args[1]   # otherwise the app picks Pictures / Music / Download by type
+        return show(cmd(payload, wait=600))
     if op == "launch":
         return show(cmd({"type": "launch", "package": args[0]}))
     if op == "screenshot":
