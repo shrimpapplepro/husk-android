@@ -13,7 +13,10 @@ struct RootView: View {
             Color.black.ignoresSafeArea()
 
             if emulator.started {
+                // Inside the safe area, below the status strip: nothing of Android's sits under the
+                // Dynamic Island or the strip. The view letterboxes to Android's aspect ratio.
                 AndroidScreen()
+                    .padding(.top, 34)
             } else {
                 StartCard(openPanel: { panelOpen = true })
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -41,9 +44,9 @@ struct AndroidScreen: View {
 
     var body: some View {
         ZStack {
-            HuskGLScreen().ignoresSafeArea()
+            HuskGLScreen()
             if runner.displayKind == .software {
-                HuskDisplay().ignoresSafeArea()
+                HuskDisplay()
             }
             if runner.bootProgress > 0 && runner.bootProgress < 100 {
                 VStack(spacing: 8) {
