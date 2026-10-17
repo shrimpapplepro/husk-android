@@ -194,8 +194,28 @@ final class QemuRunner: ObservableObject {
             let parts = entry.split(separator: ":")
             guard parts.count == 2, ["tcp", "udp"].contains(String(parts[0])),
                   let port = Int(parts[1]), (1024...65535).contains(port), port != 5555, port != 5599 else { return nil }
+            // QEMU exits if a forward cannot bind -- and the port is often taken by an iOS app (LocalSend
+            // for iOS holds 53317). A forward that cannot work is skipped, never a reason not to start.
+            guard portIsFree(String(parts[0]), port) else {
+                HuskLog.log("qemu", "not forwarding \(entry): something on this iPhone already uses that port")
+                return nil
+            }
             return (String(parts[0]), port)
         }
+    }
+
+    nonisolated private static func portIsFree(_ proto: String, _ port: Int) -> Bool {
+        let fd = socket(AF_INET, proto == "udp" ? SOCK_DGRAM : SOCK_STREAM, 0)
+        guard fd >= 0 else { return false }
+        defer { close(fd) }
+        var addr = sockaddr_in()
+        addr.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        addr.sin_family = sa_family_t(AF_INET)
+        addr.sin_port = in_port_t(UInt16(port).bigEndian)
+        addr.sin_addr.s_addr = INADDR_ANY
+        return withUnsafePointer(to: &addr) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) }
+        } == 0
     }
 
     /// "virtio" (virtio-sound-pci) or "usb" (usb-audio). Part of the machine stamp, like the device itself.

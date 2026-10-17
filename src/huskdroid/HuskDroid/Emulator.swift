@@ -25,6 +25,7 @@ final class Emulator: ObservableObject {
         ])
         HuskLog.start()
         HuskLog.log("ui", AppVersion.display)
+        clearBogusMemoryVerdict()
         JITBootstrap.installTrapGuard()
         do { try GuestImage.shared.prepareFirmware() } catch {
             HuskLog.log("guest", "firmware not ready: \(error.localizedDescription)")
@@ -40,6 +41,21 @@ final class Emulator: ObservableObject {
             .filter { !$0 }
             .sink { _ in Emulator.reopenHome(after: 2) }
             .store(in: &watchers)
+    }
+
+    /// Build 563 crashed in qemu_init on a port forward that could not bind, and the engine read that
+    /// as "5120 MiB is too much for this phone" and remembered it for good -- which would keep the
+    /// 5120 MiB save from ever restoring. Clear that verdict once; a real memory failure records it again.
+    private func clearBogusMemoryVerdict() {
+        let key = "huskdroid.clearedPortCrashVerdict"
+        guard !UserDefaults.standard.bool(forKey: key) else { return }
+        UserDefaults.standard.set(true, forKey: key)
+        let docs = HuskLog.logFileURL.deletingLastPathComponent()
+        for name in ["husk-ram-failed", "husk-ram-attempt"] {
+            if (try? FileManager.default.removeItem(at: docs.appendingPathComponent(name))) != nil {
+                HuskLog.log("ui", "cleared \(name) left by the port-forward crash")
+            }
+        }
     }
 
     static func reopenHome(after delay: TimeInterval) {
