@@ -83,7 +83,7 @@ final class JITFlow: ObservableObject {
             Task { @MainActor in self.phase = .claiming }
             let ok = JITBootstrap.claim()
             Task { @MainActor in
-                if ok { self.phase = .on }
+                if ok || JITBootstrap.prewarmed { self.phase = .on }
                 else if case .claiming = self.phase { self.phase = .failed("The debugger attached but did not answer.") }
             }
         }
@@ -94,15 +94,18 @@ final class JITFlow: ObservableObject {
             do {
                 try await Companion.shared.streamJIT(name: ProcessInfo.processInfo.processName) { line in
                     self.steps.append(line)
-                    if line.hasPrefix("attached") || line.hasPrefix("connecting") { self.phase = self.phase == .claiming ? .claiming : .attaching }
+                    // The stream lags the claim: its lines can arrive after the region is already held,
+                    // so they only ever move the phase forward, never back from .claiming or .on.
+                    guard !JITBootstrap.prewarmed, self.phase != .on, self.phase != .claiming else { return }
                     if line.hasPrefix("ERROR:") { self.phase = .failed(String(line.dropFirst(7))) }
+                    else if line.hasPrefix("connecting") || line.hasPrefix("attached") { self.phase = .attaching }
                 }
             } catch {
-                if phase != .on { phase = .failed(error.localizedDescription) }
+                if !JITBootstrap.prewarmed { phase = .failed(error.localizedDescription) }
             }
-            if phase.isBusy && !JITBootstrap.prewarmed {
-                phase = .failed(steps.last ?? "The companion stopped before JIT was on.")
-            }
+            // The region is the truth, whatever the stream said last.
+            if JITBootstrap.prewarmed { phase = .on }
+            else if phase.isBusy { phase = .failed(steps.last ?? "The companion stopped before JIT was on.") }
         }
     }
 }
