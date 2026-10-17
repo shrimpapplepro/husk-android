@@ -186,6 +186,18 @@ final class QemuRunner: ObservableObject {
     /// What the saved machine's hardware looks like, for deciding whether a
     /// restore is even possible. Was just the display; sound joins it because
     /// it changes the same thing.
+    /// Ports an Android app listens on that other devices on the network should reach, forwarded from
+    /// the iPhone's own addresses (user networking hides the guest behind NAT). "tcp:53317" style
+    /// entries in husk.portForwards. The shell bridge (5555, 5599) is NOT here: it stays on localhost.
+    nonisolated static var portForwards: [(proto: String, port: Int)] {
+        (UserDefaults.standard.stringArray(forKey: "husk.portForwards") ?? []).compactMap { entry in
+            let parts = entry.split(separator: ":")
+            guard parts.count == 2, ["tcp", "udp"].contains(String(parts[0])),
+                  let port = Int(parts[1]), (1024...65535).contains(port), port != 5555, port != 5599 else { return nil }
+            return (String(parts[0]), port)
+        }
+    }
+
     /// "virtio" (virtio-sound-pci) or "usb" (usb-audio). Part of the machine stamp, like the device itself.
     nonisolated static var soundDeviceKind: String {
         UserDefaults.standard.string(forKey: "husk.soundDeviceKind") ?? "virtio"
@@ -1150,7 +1162,8 @@ final class QemuRunner: ObservableObject {
             //         obtained without adbd's cooperation.
             "-device", "virtio-net-pci,netdev=net0",
             "-netdev", "user,id=net0,hostfwd=tcp:127.0.0.1:5555-:5555,"
-                     + "hostfwd=tcp:127.0.0.1:5599-:5599",
+                     + "hostfwd=tcp:127.0.0.1:5599-:5599"
+                     + QemuRunner.portForwards.map { ",hostfwd=\($0.proto)::\($0.port)-:\($0.port)" }.joined(),
             "-L", "\(Bundle.main.bundlePath)/pc-bios",
 
             // 360x640 rather than 1280x800: a quarter of the pixels.
