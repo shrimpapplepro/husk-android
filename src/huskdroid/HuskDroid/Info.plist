@@ -26,10 +26,7 @@
 	<key>HDCompanionToken</key>
 	<string>$(HUSKDROID_TOKEN)</string>
 	<key>HDCompanionHosts</key>
-	<array>
-		<string>192.168.1.127:8790</string>
-		<string>100.64.0.10:8790</string>
-	</array>
+	<string>$(HUSKDROID_MAC_HOSTS)</string>
 	<!-- Plain HTTP to the companion, on the LAN and on Tailscale (100.x is not "local"). -->
 	<key>NSAppTransportSecurity</key>
 	<dict>

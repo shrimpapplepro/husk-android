@@ -17,8 +17,11 @@ export HUSKDROID_TOKEN=$PERLICA_SECRET
 unset PERLICA_SECRET
 export DEVELOPER_DIR=${DEVELOPER_DIR:-/Applications/Xcode-beta.app/Contents/Developer}
 
-TEAM=ABCDE12345
-UDID=00000000-0000000000000000
+# Machine-specific values: config/local.env (see config/local.env.example).
+[[ -f $ROOT/config/local.env ]] || { echo "missing config/local.env (copy config/local.env.example)"; exit 1; }
+set -a; source $ROOT/config/local.env; set +a
+TEAM=$HUSKDROID_TEAM
+UDID=$HUSKDROID_UDID
 # The app's id since build 573, when it moved from Sideloadly to Xcode signing (Sideloadly's copy could
 # not be upgraded: iOS compares the signing id, and Sideloadly's carried a team suffix).
 BUNDLE=com.shrimpapplepro.huskdroid.$TEAM
@@ -60,6 +63,8 @@ done
 tok=$(plutil -extract HDCompanionToken raw -o - $APP/Info.plist 2>/dev/null || true)
 [[ ${#tok} -ge 16 ]] && echo "  ok       companion token (${#tok} chars)" || { echo "  MISSING  companion token"; rc=1; }
 unset tok
+hosts=$(plutil -extract HDCompanionHosts raw -o - $APP/Info.plist 2>/dev/null || true)
+[[ -n $hosts ]] && echo "  ok       companion hosts $hosts" || { echo "  MISSING  companion hosts"; rc=1; }
 (( rc == 0 )) || exit 1
 
 if $INSTALL; then

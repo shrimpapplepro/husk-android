@@ -56,8 +56,8 @@ Tailscale without listening on the phone.
   `start`, `stop`, `install APK`, `push FILE`, `key NAME`, `screenshot`, `jit`.
 - Bearer token, from the vault (`huskdroid.token`), handed to xcodebuild through
   the environment by `src/huskdroid/build.sh` (never in a tracked file).
-- Listens on 8790. Addresses tried by the app: 192.168.1.127,
-  100.64.0.10 (Tailscale).
+- Listens on 8790 (and 8791 for tunnels). The app tries the addresses in
+  `HUSKDROID_MAC_HOSTS` (config/local.env) in order: Wi-Fi, then Tailscale.
 
 ## Identity and signing
 

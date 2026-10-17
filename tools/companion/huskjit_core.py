@@ -10,6 +10,7 @@ the way Husk's husk-jit.js does under StikDebug:
 `grant()` is the whole job; the companion and the huskjit-net command both call it.
 """
 import asyncio
+import os
 import plistlib
 import re
 import threading
@@ -20,8 +21,23 @@ import pymobiledevice3.remote.userspace_tunnel as ut
 from pymobiledevice3.lockdown import create_using_tcp
 from pymobiledevice3.pair_records import get_preferred_pair_record
 
-UDID = "00000000-0000000000000000"
-HOSTS = ["192.168.1.151", "100.64.0.20"]  # Arona: home Wi-Fi, then Tailscale
+def _config():
+    """HUSKDROID_* from the environment, else ~/.config/huskdroid/config.env (install.sh copies
+    config/local.env there)."""
+    values = {}
+    path = Path.home() / ".config" / "huskdroid" / "config.env"
+    if path.exists():
+        for line in path.read_text().splitlines():
+            if "=" in line and not line.lstrip().startswith("#"):
+                key, _, value = line.partition("=")
+                values[key.strip()] = value.strip()
+    values.update({k: v for k, v in os.environ.items() if k.startswith("HUSKDROID_")})
+    return values
+
+
+_CONFIG = _config()
+UDID = _CONFIG.get("HUSKDROID_UDID", "")
+HOSTS = [h.strip() for h in _CONFIG.get("HUSKDROID_PHONE_HOSTS", "").split(",") if h.strip()]  # Wi-Fi, then Tailscale
 PAIR_DIR = Path.home() / ".pymobiledevice3"
 DEBUGPROXY = "com.apple.internal.dt.remote.debugproxy"
 PAGE = 16384

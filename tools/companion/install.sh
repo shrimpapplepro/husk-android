@@ -12,7 +12,9 @@ VAULT=$HOME/.local/bin/perlica-secret
 [[ -x $PY ]] || { echo "pymobiledevice3 missing: uv tool install pymobiledevice3"; exit 1; }
 $VAULT check huskdroid.token >/dev/null || { echo "no huskdroid.token in the vault: perlica-secret set huskdroid.token"; exit 1; }
 
-mkdir -p $DEST $HOME/.local/bin $HOME/Library/Logs/HuskDroid
+[[ -f $HERE/../../config/local.env ]] || { echo "missing config/local.env (copy config/local.env.example)"; exit 1; }
+mkdir -p $DEST $HOME/.local/bin $HOME/Library/Logs/HuskDroid $HOME/.config/huskdroid
+install -m 600 $HERE/../../config/local.env $HOME/.config/huskdroid/config.env
 cp $HERE/companion.py $HERE/huskjit_core.py $DEST/
 install -m 755 $HERE/huskctl $HOME/.local/bin/huskctl
 cat > $HOME/.local/bin/huskjit-net <<EOF

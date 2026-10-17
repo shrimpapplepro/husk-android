@@ -57,6 +57,7 @@ targets:
           - "$(SRCROOT)/../../build/ios-arm64/lib"
         # The token is not in any file: the build script exports it from the vault.
         HUSKDROID_TOKEN: "$(HUSKDROID_TOKEN)"
+        HUSKDROID_MAC_HOSTS: "$(HUSKDROID_MAC_HOSTS)"
     dependencies:
       - framework: ../../build/ios-arm64/lib/libqemu-aarch64-softmmu.dylib
         embed: true

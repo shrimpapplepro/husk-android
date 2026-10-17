@@ -22,3 +22,7 @@ third_party/gpu/
 .build/
 *.ipa
 .freebuff/
+
+# Machine-specific values (see config/local.env.example)
+config/local.env
+__pycache__/

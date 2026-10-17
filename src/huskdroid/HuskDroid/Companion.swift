@@ -21,7 +21,9 @@ final class Companion: ObservableObject {
     var tunnelToken: String { token }
 
     private let token = Bundle.main.object(forInfoDictionaryKey: "HDCompanionToken") as? String ?? ""
-    private let hosts = Bundle.main.object(forInfoDictionaryKey: "HDCompanionHosts") as? [String] ?? []
+    /// "host:port,host:port" from config/local.env (HUSKDROID_MAC_HOSTS), tried in order.
+    private let hosts = (Bundle.main.object(forInfoDictionaryKey: "HDCompanionHosts") as? String ?? "")
+        .split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
     private var base: URL?
     private var started = false
     private let shipper = LogShipper()
