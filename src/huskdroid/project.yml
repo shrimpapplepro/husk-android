@@ -42,6 +42,7 @@ targets:
       base:
         PRODUCT_NAME: HuskDroid
         PRODUCT_BUNDLE_IDENTIFIER: com.shrimpapplepro.huskdroid
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         INFOPLIST_FILE: HuskDroid/Info.plist
         CODE_SIGN_ENTITLEMENTS: HuskDroid/HuskDroid.entitlements
         CODE_SIGN_STYLE: Automatic
