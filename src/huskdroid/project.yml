@@ -26,6 +26,7 @@ targets:
         excludes:
           - "Info.plist"
           - "HuskDroid.entitlements"
+          - "HuskDroid-signed.entitlements"
       # The emulator engine, shared with Husk's sources rather than copied, so upstream fixes merge.
       - path: ../app/Husk/QemuRunner.swift
       - path: ../app/Husk/GuestImage.swift
