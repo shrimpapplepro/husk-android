@@ -23,6 +23,10 @@ final class Emulator: ObservableObject {
             // Android's servers get ports of their own, never ones the iPhone's apps use: LocalSend for iOS
             // holds 53317, so Android's LocalSend is set to 53318 and reached at the iPhone's address on it.
             "husk.portForwards": ["tcp:53318", "udp:53318"],
+            // Software display: Android draws on the CPU, so a save holds no GPU state and a restore
+            // resumes exactly where it was. In GPU mode every restore set off a full framework restart
+            // (~60 s of black) because the virgl state cannot be saved.
+            "husk.gpuMode": false,
         ])
         HuskLog.start()
         HuskLog.log("ui", AppVersion.display)
@@ -40,6 +44,8 @@ final class Emulator: ObservableObject {
             .removeDuplicates()
             .dropFirst()
             .filter { !$0 }
+            // Only GPU-mode saves close the apps; a software-display save leaves Android exactly as it was.
+            .filter { _ in QemuRunner.glProven }
             .sink { _ in Emulator.reopenHome(after: 2) }
             .store(in: &watchers)
     }
