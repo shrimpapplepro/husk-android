@@ -22,6 +22,7 @@ final class Emulator: ObservableObject {
             "husk.soundDeviceKind": "usb",
         ])
         HuskLog.start()
+        HuskLog.log("ui", AppVersion.display)
         JITBootstrap.installTrapGuard()
         do { try GuestImage.shared.prepareFirmware() } catch {
             HuskLog.log("guest", "firmware not ready: \(error.localizedDescription)")
@@ -235,4 +236,10 @@ enum AndroidFiles {
         HuskLog.log("files", "copied \(file.lastPathComponent) to \(dest)")
         return dest
     }
+}
+
+enum AppVersion {
+    static let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "?"
+    static let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "?"
+    static var display: String { "HuskDroid \(version) (\(build))" }
 }

@@ -255,6 +255,9 @@ struct ControlPanel: View {
             } else if let result {
                 Text(result).font(.footnote).foregroundStyle(.secondary).lineLimit(3)
             }
+            Text(AppVersion.display)
+                .font(.caption2.monospacedDigit()).foregroundStyle(.tertiary)
+                .frame(maxWidth: .infinity, alignment: .trailing)
         }
         .padding(18)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
