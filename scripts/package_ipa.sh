@@ -17,7 +17,7 @@
 set -euo pipefail
 
 HUSK_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-DD="${DD:-/tmp/husk_ipa}"
+DD="${DD:-$HUSK_ROOT/build/dd}"
 TROLLSTORE=false
 OUT=""
 for arg in "$@"; do
@@ -132,7 +132,7 @@ fi
 # @rpath/libANGLE-shared.dylib". Everything else in this validation passed. A
 # check that covers one of two required libraries is a check that reports
 # success on a bundle that cannot launch.
-for lib in libqemu-aarch64-softmmu.dylib libANGLE-shared.dylib libhuskps4.dylib; do
+for lib in libqemu-aarch64-softmmu.dylib libANGLE-shared.dylib; do
     if [ ! -f "$APP/Frameworks/$lib" ]; then
         echo "  MISSING  Frameworks/$lib" >&2
         rc=1
@@ -156,10 +156,7 @@ done
 # Built-in StikJIT's helper (without it the app still installs and runs with
 # StikDebug, but its JIT setup would offer a method that can only fail), and the
 # widget that draws the download Live Activity.
-for f in "$APP/PlugIns/HuskJITHelper.appex/HuskJITHelper" \
-         "$APP/PlugIns/HuskDownloadsWidget.appex/HuskDownloadsWidget" \
-         "$APP/Frameworks/StikJIT.framework/StikJIT" \
-         "$APP/Frameworks/StikJIT.framework/Info.plist"; do
+for f in "$APP/PlugIns/HuskDownloadsWidget.appex/HuskDownloadsWidget"; do
     if [ ! -f "$f" ]; then
         echo "  MISSING  ${f#$APP/}" >&2
         rc=1

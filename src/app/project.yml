@@ -115,11 +115,7 @@ targets:
           # Security verifies the licence signature Minecraft's UI engine checks through Java's Signature class.
           - "-framework"
           - "Security"
-          # On-device pairing for Built-in StikJIT, built by scripts/build_rppairing_ios.sh.
-          - "-lhusk_rppairing"
     dependencies:
-      # Built-in StikJIT's debugger process. Embedded into PlugIns/.
-      - target: HuskJITHelper
       # The download Live Activity (Lock Screen and Dynamic Island). Embedded into PlugIns/.
       - target: HuskDownloadsWidget
       # Built by scripts/build_ios.sh. Embedded and signed into the bundle.
@@ -140,20 +136,6 @@ targets:
       # dropped it, and the app died at qemu_egl_init_dpy_cocoa with
       # "Couldn't open @rpath/libANGLE-shared.dylib".
       - framework: ../../build/ios-arm64/sysroot/lib/libANGLE-shared.dylib
-        embed: true
-        codeSign: true
-        link: false
-      # MoltenVK, which Unreal Engine's Vulkan renderer runs on (Minecraft Dungeons). Built from
-      # KhronosGroup/MoltenVK v1.4.2 with `make ios` (third_party/build/MoltenVK-1.4.2) and copied to
-      # build/ios-arm64/lib. Embedded, not linked: the native runtime opens it by path when an Unreal game starts.
-      - framework: ../../build/ios-arm64/lib/MoltenVK.xcframework
-        embed: true
-        codeSign: true
-        link: false
-      # The PS4 layer: Bachata-S4's core (branch husk) on husk-fex's FEXCore, as one dylib exporting husk_console_module_v1.
-      # Built by scripts/build_ps4_ios.sh. Embedded, not linked: it needs iOS 17.4 and is opened by path only there
-      # (PS4Store.moduleURL), by the console host (src/translation-layer-next/husk-console-host.c).
-      - framework: ../../build/ios-arm64/lib/libhuskps4.dylib
         embed: true
         codeSign: true
         link: false
@@ -230,69 +212,6 @@ targets:
           - "$(BUILT_PRODUCTS_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/edk2-aarch64-code.fd"
           - "$(BUILT_PRODUCTS_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/lineage-efi-vars-seed.fd"
           - "$(BUILT_PRODUCTS_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/lineage-vdb-seed.qcow2"
-
-    postBuildScripts:
-      - name: Embed StikJIT
-        # The helper links StikJIT; it lives here, in the app's Frameworks,
-        # because sideloaders re-sign frameworks there and left one inside the
-        # helper unsigned. Upstream's framework has no Info.plist, and installd
-        # refuses an embedded framework without one. Copy it in with a minimal
-        # plist rather than editing the vendored bundle, then sign it as the
-        # copy phase would.
-        script: |
-          set -e
-          SRC="$SRCROOT/Frameworks/StikJIT.xcframework/ios-arm64/StikJIT.framework"
-          DST="$TARGET_BUILD_DIR/$FRAMEWORKS_FOLDER_PATH/StikJIT.framework"
-          rm -rf "$DST"
-          mkdir -p "$(dirname "$DST")"
-          ditto "$SRC" "$DST"
-          rm -rf "$DST/Headers" "$DST/Modules"
-          PLIST="$DST/Info.plist"
-          if [ ! -f "$PLIST" ]; then
-            plutil -create xml1 "$PLIST"
-            plutil -insert CFBundleIdentifier -string "$PRODUCT_BUNDLE_IDENTIFIER.StikJIT" "$PLIST"
-            plutil -insert CFBundleExecutable -string StikJIT "$PLIST"
-            plutil -insert CFBundleName -string StikJIT "$PLIST"
-            plutil -insert CFBundlePackageType -string FMWK "$PLIST"
-            plutil -insert CFBundleInfoDictionaryVersion -string 6.0 "$PLIST"
-            plutil -insert CFBundleShortVersionString -string 1.9.0 "$PLIST"
-            plutil -insert CFBundleVersion -string 1.9.0 "$PLIST"
-            plutil -insert MinimumOSVersion -string 17.4 "$PLIST"
-            plutil -insert CFBundleSupportedPlatforms -array "$PLIST"
-            plutil -insert CFBundleSupportedPlatforms.0 -string iPhoneOS "$PLIST"
-          fi
-          if [ -n "$EXPANDED_CODE_SIGN_IDENTITY" ] && [ "$CODE_SIGNING_ALLOWED" != "NO" ]; then
-            codesign --force --sign "$EXPANDED_CODE_SIGN_IDENTITY" --timestamp=none "$DST"
-          fi
-        basedOnDependencyAnalysis: false
-
-  # Built-in StikJIT's debugger (docs/06-built-in-jit.md). A process cannot
-  # synchronously debug itself, so StikJIT runs here and attaches to the app.
-  # iOS 26 only: the app falls back to StikDebug below that.
-  HuskJITHelper:
-    type: app-extension
-    platform: iOS
-    deploymentTarget: "26.0"
-    sources:
-      - path: HuskJITHelper
-    settings:
-      base:
-        PRODUCT_BUNDLE_IDENTIFIER: $(HUSK_BUNDLE_IDENTIFIER).JITHelper
-        INFOPLIST_FILE: HuskJITHelper/Info.plist
-        GENERATE_INFOPLIST_FILE: NO
-        APPLICATION_EXTENSION_API_ONLY: YES
-        CODE_SIGN_STYLE: Automatic
-        TARGETED_DEVICE_FAMILY: "1,2"
-        # StikJIT.framework, in the app's Frameworks (the app target's Embed StikJIT).
-        LD_RUNPATH_SEARCH_PATHS:
-          - "$(inherited)"
-          - "@executable_path/../../Frameworks"
-    dependencies:
-      # StikJIT 1.9.0 (MPL-2.0, with idevice under MIT), from
-      # github.com/StikDebug/StikJIT/releases/tag/1.9.0, unmodified. Linked
-      # here and embedded by the app target's Embed StikJIT.
-      - framework: Frameworks/StikJIT.xcframework
-        embed: false
 
   # Draws the Live Activity a download shows (Downloads.swift starts and updates it). Live Activities are iOS 16.1.
   HuskDownloadsWidget:
