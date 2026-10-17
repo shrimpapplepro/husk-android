@@ -10,6 +10,9 @@ final class Emulator: ObservableObject {
 
     @Published private(set) var started = false
     @Published var message: String?
+    /// Android's screen is fully up (home or an app is showing). False through a cold boot, and through
+    /// the framework restart that follows every GPU-mode restore; the loading background shows until then.
+    @Published private(set) var screenReady = false
     private var watchers = Set<AnyCancellable>()
 
     /// Before the first frame: logs, the trap guard, the firmware and disk seeds, sound on.
@@ -89,6 +92,48 @@ final class Emulator: ObservableObject {
         QemuRunner.shared.start()
         GuestBridge.shared.startHealthWatch()
         if QemuRunner.soundEnabled { HuskAudio.shared.start() }
+        watchForScreen()
+    }
+
+    /// Decide when Android's screen is really up, by asking Android every 2 s over the shell bridge.
+    ///
+    /// A cold boot is ready at sys.boot_completed. A restore is not: the saved machine wakes with dead
+    /// GPU handles, Android's watchdog restarts the framework (~60 s), and only the screen that restart
+    /// enables counts -- a boot_progress_enable_screen event stamped after the restore. Three minutes
+    /// is the cap, so the background can never stay up for good.
+    private func watchForScreen() {
+        screenReady = false
+        let thread = Thread {
+            let began = Date()
+            var restoreUptimeMs: Int?
+            var ready = false
+            while !ready && Date().timeIntervalSince(began) < 180 {
+                Thread.sleep(forTimeInterval: 2)
+                guard let r = try? GuestBridge.shared.run(
+                    "cat /proc/uptime; getprop sys.boot_completed; "
+                    + "logcat -b events -d -t 4000 2>/dev/null | grep boot_progress_enable_screen | tail -3",
+                    timeout: 15) else { continue }
+                let lines = r.out.split(separator: "\n").map(String.init)
+                guard let uptime = lines.first.flatMap({ Double($0.split(separator: " ").first ?? "") }) else { continue }
+                let booted = lines.count > 1 && lines[1].trimmingCharacters(in: .whitespaces) == "1"
+                let screens = lines.compactMap { line -> Int? in
+                    guard let r = line.range(of: "boot_progress_enable_screen: ") else { return nil }
+                    return Int(line[r.upperBound...].trimmingCharacters(in: .whitespaces))
+                }
+                let restored = QemuRunner.didRestore
+                if restored {
+                    if restoreUptimeMs == nil { restoreUptimeMs = Int(uptime * 1000) - 3000 }
+                    ready = booted && screens.contains { $0 > restoreUptimeMs! }
+                } else {
+                    ready = booted
+                }
+            }
+            HuskLog.log("ui", "Android's screen is up after \(Int(Date().timeIntervalSince(began))) s"
+                              + (ready ? "" : " (gave up waiting)"))
+            Task { @MainActor in self.screenReady = true }
+        }
+        thread.qualityOfService = .utility
+        thread.start()
     }
 
     /// QEMU cannot be stopped and started again in one process, so stopping is: save the machine, then quit.
