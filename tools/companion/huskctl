@@ -1,0 +1,113 @@
+#!/usr/bin/env python3
+"""Talk to HuskDroid through its companion.
+
+  huskctl status                     who is connected, when last seen
+  huskctl logs [-f] [-n N]           the app's log (follow with -f)
+  huskctl jit                        grant JIT to the running app
+  huskctl shell CMD...               run CMD inside Android, print its output
+  huskctl start | stop               start / stop Android
+  huskctl key NAME                   volup voldown mute power back home recents
+  huskctl install FILE.apk           install an APK into Android
+  huskctl push FILE [DIR]            copy a file into Android (default /sdcard/Download)
+  huskctl launch PACKAGE             open an Android app
+  huskctl screenshot                 save Android's screen on this Mac, print the path
+  huskctl raw '{"type": ...}'        any command, as JSON
+"""
+import json
+import os
+import shutil
+import sys
+import urllib.error
+import urllib.request
+from pathlib import Path
+
+BASE = os.environ.get("HUSKDROID_COMPANION", "http://127.0.0.1:8790")
+VAULT = shutil.which("perlica-secret") or str(Path.home() / ".local/bin/perlica-secret")
+
+
+def token():
+    t = os.environ.get("PERLICA_SECRET")
+    if not t:  # run again with the token in the environment, never on the command line
+        os.execv(VAULT, [VAULT, "run", "huskdroid.token", "--", sys.executable, *sys.argv])
+    return t
+
+
+def request(method, path, body=None, ctype="application/json", timeout=90):
+    req = urllib.request.Request(BASE + path, data=body, method=method)
+    req.add_header("Authorization", f"Bearer {token()}")
+    if body is not None:
+        req.add_header("Content-Type", ctype)
+    return urllib.request.urlopen(req, timeout=timeout)
+
+
+def cmd(payload, wait=60):
+    try:
+        with request("POST", f"/v1/cmd?wait={wait}", json.dumps(payload).encode(), timeout=wait + 15) as r:
+            return json.load(r)
+    except urllib.error.HTTPError as e:
+        return json.load(e)
+
+
+def show(result):
+    if result.get("output") is not None:
+        sys.stdout.write(result["output"] if result["output"].endswith("\n") else result["output"] + "\n")
+    rest = {k: v for k, v in result.items() if k != "output"}
+    if rest != {"ok": True}:
+        print(json.dumps(rest), file=sys.stderr if result.get("ok") else sys.stdout)
+    return 0 if result.get("ok") else 1
+
+
+def stage(path):
+    p = Path(path).expanduser()
+    with request("POST", f"/v1/stage?name={urllib.request.quote(p.name)}", p.read_bytes(),
+                 "application/octet-stream", timeout=600) as r:
+        return json.load(r)["name"]
+
+
+def stream(path, timeout=None):
+    with request("GET" if "log" in path else "POST", path, b"{}" if "jit" in path else None,
+                 timeout=timeout or 3600) as r:
+        for line in r:
+            sys.stdout.write(line.decode("utf-8", "replace"))
+            sys.stdout.flush()
+
+
+def main(argv):
+    if not argv or argv[0] in ("-h", "--help", "help"):
+        print(__doc__.strip())
+        return 0
+    op, args = argv[0], argv[1:]
+    if op == "status":
+        with request("GET", "/v1/status") as r:
+            print(json.dumps(json.load(r), indent=2))
+        return 0
+    if op == "logs":
+        n = int(args[args.index("-n") + 1]) if "-n" in args else 200
+        stream(f"/v1/log?since=-{n}&follow={'1' if '-f' in args else '0'}")
+        return 0
+    if op == "jit":
+        stream("/v1/jit", timeout=300)
+        return 0
+    if op == "shell":
+        return show(cmd({"type": "shell", "cmd": " ".join(args)}, wait=120))
+    if op in ("start", "stop"):
+        return show(cmd({"type": op}, wait=120))
+    if op == "key":
+        return show(cmd({"type": "key", "name": args[0]}))
+    if op == "install":
+        return show(cmd({"type": "install", "file": stage(args[0])}, wait=600))
+    if op == "push":
+        dest = args[1] if len(args) > 1 else "/sdcard/Download"
+        return show(cmd({"type": "push", "file": stage(args[0]), "dir": dest}, wait=600))
+    if op == "launch":
+        return show(cmd({"type": "launch", "package": args[0]}))
+    if op == "screenshot":
+        return show(cmd({"type": "screenshot"}))
+    if op == "raw":
+        return show(cmd(json.loads(args[0]), wait=120))
+    print(f"unknown command {op!r}; huskctl help", file=sys.stderr)
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
