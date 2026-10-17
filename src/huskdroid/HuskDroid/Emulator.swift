@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
+import Combine
 import Foundation
 import UIKit
 
@@ -9,6 +10,7 @@ final class Emulator: ObservableObject {
 
     @Published private(set) var started = false
     @Published var message: String?
+    private var watchers = Set<AnyCancellable>()
 
     /// Before the first frame: logs, the trap guard, the firmware and disk seeds, sound on.
     func prepare() {
@@ -25,6 +27,24 @@ final class Emulator: ObservableObject {
             HuskLog.log("guest", "firmware not ready: \(error.localizedDescription)")
         }
         GuestImage.shared.refresh()
+
+        // A save stops the compositor and closes every app, the launcher included, and only the
+        // compositor comes back by itself. Left alone, Android sat on an empty FallbackHome for
+        // three and a half minutes, eating touches. Open the home screen as soon as the save is done.
+        QemuRunner.shared.$isSavingState
+            .removeDuplicates()
+            .dropFirst()
+            .filter { !$0 }
+            .sink { _ in Emulator.reopenHome(after: 2) }
+            .store(in: &watchers)
+    }
+
+    static func reopenHome(after delay: TimeInterval) {
+        DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + delay) {
+            let r = try? GuestBridge.shared.run(
+                "am start -a android.intent.action.MAIN -c android.intent.category.HOME", timeout: 30)
+            HuskLog.log("ui", "after the save: home screen \(r?.status == 0 ? "reopened" : "NOT reopened (\(r?.out ?? "no bridge"))")")
+        }
     }
 
     var needsDownload: Bool {

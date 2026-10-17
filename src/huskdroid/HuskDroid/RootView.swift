@@ -48,7 +48,16 @@ struct AndroidScreen: View {
             if runner.displayKind == .software {
                 HuskDisplay()
             }
-            if runner.bootProgress > 0 && runner.bootProgress < 100 {
+            if runner.isSavingState {
+                VStack(spacing: 8) {
+                    ProgressView()
+                    Text("Saving Android…").font(.subheadline.weight(.semibold))
+                    Text("So it starts in seconds next time.").font(.caption).foregroundStyle(.secondary)
+                }
+                .padding(18)
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .allowsHitTesting(false)
+            } else if runner.bootProgress > 0 && runner.bootProgress < 100 {
                 VStack(spacing: 8) {
                     ProgressView(value: Double(runner.bootProgress), total: 100).frame(width: 180)
                     Text(runner.setupMessage ?? "Starting Android…")
