@@ -952,6 +952,9 @@ final class QemuRunner: ObservableObject {
            let recorded = try? String(contentsOfFile: snapshotSizePath, encoding: .utf8),
            let mib = Int(recorded.trimmingCharacters(in: .whitespacesAndNewlines)), mib > 0 {
             HuskLog.log("qemu", "snapshot exists; using its guest size of \(mib) MiB")
+            // The restore check compares the saved size with lastGuestMiB; returning without
+            // setting it left 0 there, so a locally saved machine never restored.
+            QemuRunner.shared.lastGuestMiB = mib
             return mib
         }
 
