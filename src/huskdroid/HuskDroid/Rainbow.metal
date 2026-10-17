@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
-// The loading background: a rainbow that flows, computed per pixel per frame.
+// The loading background: a soft spectrum glowing out of black, computed per pixel per frame.
 #include <metal_stdlib>
 #include <SwiftUI/SwiftUI_Metal.h>
 using namespace metal;
@@ -12,15 +12,33 @@ static float3 hueToRGB(float h)
 
 [[ stitchable ]] half4 huskRainbow(float2 position, half4 color, float time, float2 size)
 {
-    float2 uv = position / max(size, float2(1.0));
-    // Two slow waves bend the bands so they flow rather than slide.
-    float bend = 0.10 * sin(uv.y * 5.0 + time * 0.9) + 0.07 * sin(uv.x * 7.0 - time * 0.6);
-    float hue = fract(uv.x * 0.55 + uv.y * 0.45 + bend + time * 0.06);
-    float3 rgb = hueToRGB(hue);
-    // A soft light sweeping across, so it reads as lit rather than flat.
-    float glow = 0.5 + 0.5 * sin((uv.x + uv.y) * 3.0 - time * 1.3);
-    rgb = mix(rgb, float3(1.0), 0.12 + 0.10 * glow);
-    // Darker toward the edges, so Android's text in the middle stays readable.
-    float vignette = smoothstep(1.15, 0.25, length(uv - 0.5) * 1.6);
-    return half4(half3(rgb * (0.55 + 0.45 * vignette)), 1.0);
+    // Centred, aspect-correct coordinates: the short side spans -0.5 .. 0.5.
+    float2 uv = (position - 0.5 * size) / max(min(size.x, size.y), 1.0);
+
+    // Five wide glows stacked top to bottom in spectrum order -- violet, blue, green, yellow, orange --
+    // each drifting on its own slow orbit so the colours breathe into each other.
+    const float hues[5] = { 0.78, 0.62, 0.36, 0.15, 0.06 };
+    float3 light = float3(0.0);
+    for (int i = 0; i < 5; i++) {
+        float fi = float(i);
+        float y = mix(-0.55, 0.55, fi / 4.0);
+        float2 centre = float2(0.18 * sin(time * 0.21 + fi * 1.7),
+                               y + 0.08 * cos(time * 0.17 + fi * 2.3));
+        float2 d = (uv - centre) * float2(1.0, 1.35);
+        float glow = exp(-dot(d, d) * 5.5);
+        float hue = fract(hues[i] + 0.015 * sin(time * 0.1 + fi));
+        light += hueToRGB(hue) * glow;
+    }
+
+    // Fade to black toward the edges, then a soft tone curve so overlaps glow instead of clipping.
+    float falloff = exp(-dot(uv * float2(1.0, 0.75), uv * float2(1.0, 0.75)) * 2.4);
+    float3 rgb = light * falloff * 0.85;
+    rgb = rgb / (1.0 + rgb);
+    rgb = mix(float3(dot(rgb, float3(0.299, 0.587, 0.114))), rgb, 0.85);   // a touch less saturated
+
+    // Dither, so the long dark gradients do not band.
+    float noise = fract(sin(dot(position, float2(12.9898, 78.233))) * 43758.5453);
+    rgb += (noise - 0.5) / 255.0;
+
+    return half4(half3(max(rgb, 0.0)), 1.0);
 }
