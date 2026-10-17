@@ -16,6 +16,9 @@ final class Companion: ObservableObject {
 
     @Published private(set) var link: Link = .searching
     var isLinked: Bool { if case .linked = link { return true }; return false }
+    /// The companion's host, for connections that are not HTTP (tunnels dial back to it).
+    var host: String? { base?.host }
+    var tunnelToken: String { token }
 
     private let token = Bundle.main.object(forInfoDictionaryKey: "HDCompanionToken") as? String ?? ""
     private let hosts = Bundle.main.object(forInfoDictionaryKey: "HDCompanionHosts") as? [String] ?? []
