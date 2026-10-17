@@ -160,6 +160,9 @@ stage_qemu() {
     local log="$LOGS/qemu.log"
     done_stage qemu && { echo "[skip] qemu"; return 0; }
     apply_patch qemu-10.0.12-utm qemu-10.0.12-utm.patch
+    # iOS binaries cannot run on the build Mac (macOS 27 kills them), and an empty [properties]
+    # makes meson try to, then call the compiler broken. Say so in the cross file configure writes.
+    grep -q needs_exe_wrapper "$dir/configure" || perl -pi -e 's/^(  echo "\[properties\]" >> \$cross)\n/$1\n  echo "needs_exe_wrapper = true" >> \$cross\n/' "$dir/configure"
     banner "building qemu (this is the long one)"
     rm -rf "$dir/_husk_build"; mkdir -p "$dir/_husk_build"
     ( cd "$dir/_husk_build" \
