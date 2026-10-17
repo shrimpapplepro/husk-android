@@ -13,7 +13,7 @@ settings:
     SWIFT_VERSION: "5.0"
     # The display loop and the JIT path are timing-sensitive; a debug build misleads.
     SWIFT_OPTIMIZATION_LEVEL: "-O"
-    MARKETING_VERSION: "0.1.0"
+    MARKETING_VERSION: "0.2.0"
     CURRENT_PROJECT_VERSION: "1"
 
 targets:
