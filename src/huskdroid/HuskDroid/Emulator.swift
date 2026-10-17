@@ -30,6 +30,9 @@ final class Emulator: ObservableObject {
             // but a cold boot took 2 min 47 s (GPU: ~60 s) and the launcher and system_server raised
             // "isn't responding" dialogs under its load. The GPU's restore-then-restart is the better trade.
             "husk.gpuMode": true,
+            // Sideloadly's free-account signing drops extended-virtual-addressing; 5 GiB then exhausted the
+            // address space mid-boot (build 570). 4 GiB is what Husk's own shipped snapshot uses.
+            "husk.maxGuestMiB": 4096,
         ])
         HuskLog.start()
         HuskLog.log("ui", AppVersion.display)

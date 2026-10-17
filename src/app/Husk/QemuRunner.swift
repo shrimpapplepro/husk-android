@@ -218,6 +218,15 @@ final class QemuRunner: ObservableObject {
         } == 0
     }
 
+    /// A ceiling on the guest's RAM (husk.maxGuestMiB), or no ceiling. A sideloader that signs with a free
+    /// account drops extended-virtual-addressing, and in the smaller address space that leaves, a 5 GiB
+    /// guest plus QEMU's own growth ran out mid-boot (qemu_memalign could not find 16 MiB). A save taken
+    /// above the ceiling is not restored.
+    nonisolated static var maxGuestMiB: Int {
+        let v = UserDefaults.standard.integer(forKey: "husk.maxGuestMiB")
+        return v > 0 ? v : Int.max
+    }
+
     /// "virtio" (virtio-sound-pci) or "usb" (usb-audio). Part of the machine stamp, like the device itself.
     nonisolated static var soundDeviceKind: String {
         UserDefaults.standard.string(forKey: "husk.soundDeviceKind") ?? "virtio"
@@ -982,7 +991,8 @@ final class QemuRunner: ObservableObject {
 
         if !strategyChanged,
            let recorded = try? String(contentsOfFile: snapshotSizePath, encoding: .utf8),
-           let mib = Int(recorded.trimmingCharacters(in: .whitespacesAndNewlines)), mib > 0 {
+           let mib = Int(recorded.trimmingCharacters(in: .whitespacesAndNewlines)), mib > 0,
+           mib <= QemuRunner.maxGuestMiB {
             HuskLog.log("qemu", "snapshot exists; using its guest size of \(mib) MiB")
             // The restore check compares the saved size with lastGuestMiB; returning without
             // setting it left 0 there, so a locally saved machine never restored.
@@ -1055,7 +1065,7 @@ final class QemuRunner: ObservableObject {
         // made for it -- the address space is there, the file maps and writes
         // -- and then killed qemu_init three times regardless. Whatever objects
         // to it is not something this code can see, so it is simply not offered.
-        var candidates = [5120, 4096, 3584, 3072, 2560, 2048]
+        var candidates = [5120, 4096, 3584, 3072, 2560, 2048].filter { $0 <= QemuRunner.maxGuestMiB }
 
         // Fold a failed attempt into the permanent floor before using it.
         if let attempted = readInt(ramAttemptPath), readInt(ramProvenPath) != attempted {
@@ -1070,7 +1080,8 @@ final class QemuRunner: ObservableObject {
                               + "staying below it")
         }
         let fileBackedTarget = ramFileReady ? largestMappableMiB(candidates) : nil
-        let target = fileBackedTarget.map { max(anonymousTarget, $0) } ?? anonymousTarget
+        let target = min(fileBackedTarget.map { max(anonymousTarget, $0) } ?? anonymousTarget,
+                         QemuRunner.maxGuestMiB)
 
         QemuRunner.shared.lastGuestMiB = target
         try? String(target).write(toFile: ramAttemptPath, atomically: true, encoding: .utf8)
