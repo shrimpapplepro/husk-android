@@ -2,7 +2,7 @@ name: HuskDroid
 options:
   bundleIdPrefix: com.shrimpapplepro
   deploymentTarget:
-    iOS: "17.0"
+    iOS: "27.0"
   createIntermediateGroups: true
 
 settings:
