@@ -5,22 +5,23 @@ Follow these stages in order. Each ends with a check; do not move on until it pa
 
 ## 0. Values that belong to one setup
 
-These are hard-coded for the original machine. Change every one before building for another iPhone,
-Mac or developer team.
+They live in `config/local.env`, which git ignores. Create it from the template and fill in:
 
-| Value | Original | Where |
+```sh
+cp config/local.env.example config/local.env
+```
+
+| Variable | What | How to find it |
 |---|---|---|
-| iPhone UDID | `00000000-0000000000000000` | `tools/companion/huskjit_core.py` (`UDID`), `src/huskdroid/build.sh` (`UDID`) |
-| iPhone addresses (Wi-Fi, Tailscale) | `192.168.1.151`, `100.64.0.20` | `tools/companion/huskjit_core.py` (`HOSTS`) |
-| Mac (companion) addresses | `192.168.1.127:8790`, `100.64.0.10:8790` | `src/huskdroid/HuskDroid/Info.plist` (`HDCompanionHosts`) |
-| Paid developer team | `ABCDE12345` | `src/huskdroid/build.sh` (`TEAM`; the bundle id is `com.shrimpapplepro.huskdroid.$TEAM`) |
-| Companion token | vault entry `huskdroid.token` | `perlica-secret` (see 2); exported as `PERLICA_SECRET` / `HUSKDROID_TOKEN` |
-| Xcode | `/Applications/Xcode-beta.app` (27.2) | `DEVELOPER_DIR` defaults in `scripts/build_native.sh`, `src/huskdroid/build.sh` |
-| pymobiledevice3's Python | `~/.local/share/uv/tools/pymobiledevice3/bin/python` | `tools/companion/install.sh` (`PY`) |
+| `HUSKDROID_UDID` | The iPhone | `xcrun devicectl list devices` |
+| `HUSKDROID_PHONE_HOSTS` | The iPhone's addresses, tried in order (Wi-Fi, Tailscale) | `ideviceinfo -n -k WiFiAddress` + `arp -a`, `tailscale status` |
+| `HUSKDROID_MAC_HOSTS` | `host:8790` of this Mac, tried in order | `ipconfig getifaddr en0`, `tailscale ip -4` |
+| `HUSKDROID_TEAM` | Paid developer team that signs the app | the team id of a paid account in Xcode |
 
-Find them: `xcrun devicectl list devices` (UDID), `ideviceinfo -k WiFiAddress` + the router/`arp -a`
-(iPhone Wi-Fi IP), `tailscale status` (Tailscale IPs), `ipconfig getifaddr en0` (Mac),
-`security find-identity -v -p codesigning` and a paid team's profiles (team).
+`build.sh` reads it (the Mac hosts go into the app's Info.plist); `tools/companion/install.sh` copies it to
+`~/.config/huskdroid/config.env`, where the companion reads the iPhone values. Also machine-specific:
+`DEVELOPER_DIR` (default `/Applications/Xcode-beta.app`) and pymobiledevice3's Python (`PY` in
+`install.sh`, default the `uv tool` install).
 
 ## 1. Engine
 
@@ -62,7 +63,7 @@ Checks:
 ```sh
 huskctl status                    # JSON from the companion
 huskjit-net --probe               # "debugserver up in 0.4s" and a qHostInfo line
-curl -s -o /dev/null -w '%{http_code}\n' http://<mac-ip>:8790/v1/status   # 401 (token required)
+curl -s -o /dev/null -w '%{http_code}\n' http://<mac-host>:8790/v1/status   # 401 (token required)
 ```
 
 ## 3. App
@@ -116,7 +117,7 @@ first save exists. Later starts log `restored a saved machine` and the screen is
 
 | Symptom | Cause and fix |
 |---|---|
-| `[jit] ERROR: the phone is not reachable` | iPhone off Wi-Fi and Tailscale disconnected; fix the network, or update `HOSTS` |
+| `[jit] ERROR: the phone is not reachable` | iPhone off Wi-Fi and Tailscale disconnected; fix the network, or `HUSKDROID_PHONE_HOSTS` |
 | `no pair record` | Plug the iPhone in once and Trust; the record is copied to `~/.pymobiledevice3` |
 | JIT attaches but `get_service_port` fails | Developer Disk Image not mounted (after a reboot): `devicectl device info ddiServices` |
 | App closes instantly in `qemu_init` | A port forward could not bind (fixed: busy ports are skipped); check `husk.portForwards` |
