@@ -225,6 +225,25 @@ int husk_audio_pull(int16_t *dst, int frames)
     }
     qatomic_set(&husk_audio.read_pos, r + (uint32_t)n);
 
+    /* Fade in when sound starts after silence. The first sample of a stream can sit anywhere
+     * (a mid-wave start, a DC offset from the device starting up), and jumping there from zero
+     * in one sample is the crack heard at the start of every sound. 10 ms is too short to hear
+     * as a fade and long enough to remove the step. */
+    {
+        static uint32_t fade_left = HUSK_AUDIO_RATE / 100;
+        const uint32_t fade_frames = HUSK_AUDIO_RATE / 100;
+        if (n == 0) {
+            fade_left = fade_frames;
+        }
+        for (size_t i = 0; i < n && fade_left > 0; i++, fade_left--) {
+            int32_t gain = (int32_t)(fade_frames - fade_left);   /* 0 .. fade_frames-1 */
+            for (int c = 0; c < HUSK_AUDIO_CHANNELS; c++) {
+                int16_t *s = &dst[i * HUSK_AUDIO_CHANNELS + c];
+                *s = (int16_t)((int32_t)*s * gain / (int32_t)fade_frames);
+            }
+        }
+    }
+
     /* Silence rather than stale data for the shortfall: a render callback that
      * leaves its buffer untouched replays whatever was there last, which is a
      * far more noticeable artefact than a gap. */

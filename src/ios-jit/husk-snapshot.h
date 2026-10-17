@@ -20,4 +20,8 @@ void husk_snapshot_save(husk_snapshot_cb cb);
  */
 bool husk_snapshot_load_at_startup(void);
 
+/* Plug the USB sound card in (BQL held), after the machine is booted or restored. It is
+   unplugged around every save and plugged back in after, so a saved machine never contains it. */
+bool husk_sound_attach(void);
+
 #endif
