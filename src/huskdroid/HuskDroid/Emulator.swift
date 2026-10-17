@@ -234,6 +234,38 @@ enum SystemKey: String, CaseIterable, Identifiable {
     }
 }
 
+/// Portrait or landscape, by hand -- like turning a phone with auto-rotate off.
+///
+/// Android's panel stays the same portrait size (no cold boot, the save stays valid); Android lays its
+/// UI out sideways inside it (user_rotation), the picture is turned a quarter turn to match
+/// (HuskGLView.rotated, which also maps touches through the turn), and iOS is held in landscape.
+@MainActor
+enum Rotation {
+    static var landscape: Bool { HuskGLView.rotated }
+
+    static func toggle() { set(landscape: !landscape) }
+
+    static func set(landscape on: Bool) {
+        HuskGLView.rotated = on
+        applyToWindow()
+        DispatchQueue.global(qos: .userInitiated).async {
+            let r = try? GuestBridge.shared.run(
+                "settings put system accelerometer_rotation 0; settings put system user_rotation \(on ? 1 : 0)", timeout: 15)
+            HuskLog.log("ui", "rotation: \(on ? "landscape" : "portrait") (android \(r?.status == 0 ? "turned" : "NOT turned"))")
+        }
+    }
+
+    /// Ask iOS to match the current choice (the delegate's mask follows HuskGLView.rotated).
+    static func applyToWindow() {
+        for case let scene as UIWindowScene in UIApplication.shared.connectedScenes {
+            scene.keyWindow?.rootViewController?.setNeedsUpdateOfSupportedInterfaceOrientations()
+            scene.requestGeometryUpdate(.iOS(interfaceOrientations: landscape ? .landscapeRight : .portrait)) { error in
+                HuskLog.log("ui", "rotation refused by iOS: \(error.localizedDescription)")
+            }
+        }
+    }
+}
+
 /// Commands from the companion (huskctl). Each returns a JSON body, or a PNG for a screenshot.
 enum RemoteCommands {
     struct Reply: @unchecked Sendable {
@@ -292,6 +324,10 @@ enum RemoteCommands {
                 }
                 Tunnel.open(session: session, host: host, tunnelPort: tunnelPort, guestPort: guestPort, token: token)
                 return json(["ok": true])
+            case "rotate":
+                let want = cmd["landscape"] as? Bool
+                await MainActor.run { want.map { Rotation.set(landscape: $0) } ?? Rotation.toggle() }
+                return json(["ok": true, "landscape": await MainActor.run { Rotation.landscape }])
             case "screenshot":
                 let png = try GuestBridge.shared.pull("screencap -p", timeout: 30)
                 return Reply(body: png, type: "image/png")

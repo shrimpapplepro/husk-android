@@ -3,7 +3,8 @@ import SwiftUI
 
 final class HuskDroidDelegate: NSObject, UIApplicationDelegate {
     func application(_ application: UIApplication, supportedInterfaceOrientationsFor window: UIWindow?) -> UIInterfaceOrientationMask {
-        [.portrait, .landscapeLeft, .landscapeRight]
+        // Locked to the Rotate button's choice: turning the phone must not fight it.
+        HuskGLView.rotated ? .landscapeRight : .portrait
     }
 }
 

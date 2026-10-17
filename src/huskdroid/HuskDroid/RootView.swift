@@ -330,20 +330,27 @@ struct ControlPanel: View {
     }
 
     private var buttons: some View {
-        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 7), spacing: 8) {
+        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 8), spacing: 8) {
             ForEach(SystemKey.allCases) { key in
-                Button { key.press() } label: {
-                    Image(systemName: key.symbol)
-                        .font(.body.weight(.medium))
-                        .frame(maxWidth: .infinity, minHeight: 40)
-                        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel(key.title)
+                Button { key.press() } label: { keyLabel(key.symbol) }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(key.title)
             }
+            Button { Rotation.toggle(); close() } label: {
+                keyLabel(Rotation.landscape ? "rectangle.portrait.rotate" : "rectangle.landscape.rotate")
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(Rotation.landscape ? "Portrait" : "Landscape")
         }
         .disabled(!emulator.started)
         .opacity(emulator.started ? 1 : 0.4)
+    }
+
+    private func keyLabel(_ symbol: String) -> some View {
+        Image(systemName: symbol)
+            .font(.body.weight(.medium))
+            .frame(maxWidth: .infinity, minHeight: 40)
+            .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
 
     private func row<Trailing: View>(_ icon: String, _ title: String, _ detail: String,
