@@ -60,7 +60,7 @@ angle_build () {
         ldflags=("OTHER_LDFLAGS=\$(inherited) -Wl,-alias_list,$1")
     fi
 
-    env -i PATH="$PATH" HOME="$HOME" xcodebuild archive \
+    env -i PATH="$PATH" HOME="$HOME" ${DEVELOPER_DIR:+DEVELOPER_DIR=$DEVELOPER_DIR} xcodebuild archive \
         -archivePath "ANGLE" -scheme "ANGLE" \
         -sdk iphoneos -arch arm64 -configuration Release \
         WEBCORE_LIBRARY_DIR="/usr/local/lib" NORMAL_UMBRELLA_FRAMEWORKS_DIR="" \
