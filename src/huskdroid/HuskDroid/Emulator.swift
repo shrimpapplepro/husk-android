@@ -115,15 +115,16 @@ final class Emulator: ObservableObject {
     /// in one of two ways: either the framework restarts (zygote is killed a few seconds after the display
     /// returns, and the new framework enables the screen again ~45 s later), or it simply carries on.
     /// Waiting only for the restart's boot_progress_enable_screen hid a working Android for the full 180 s
-    /// when it carried on, so a restore is also up once system_server has kept one pid, with
-    /// surfaceflinger running, for `steady` seconds; a pid change means a restart, and then it waits.
+    /// when it carried on, so a restore is also up once system_server's start count has held, with
+    /// surfaceflinger running, for `steady` seconds; a new count means a restart, and then it waits.
+    /// (Not pidof: the shell user sees only its own processes in /proc.)
     private func watchForScreen() {
         screenReady = false
         let thread = Thread {
             let began = Date()
             let steady: TimeInterval = 15
             var restoreUptimeMs: Int?
-            var framework: (pid: String, since: Date)?
+            var framework: (count: String, since: Date)?
             var restarted = false
             var ready = false
             var how = ""
@@ -131,7 +132,7 @@ final class Emulator: ObservableObject {
                 Thread.sleep(forTimeInterval: 2)
                 guard let r = try? GuestBridge.shared.run(
                     "cat /proc/uptime; getprop sys.boot_completed; "
-                    + "echo ss=$(pidof system_server); echo sf=$(pidof surfaceflinger); "
+                    + "echo ss=$(getprop sys.system_server.start_count); echo sf=$(getprop init.svc.surfaceflinger); "
                     + "logcat -b events -d -t 4000 2>/dev/null | grep boot_progress_enable_screen | tail -3",
                     timeout: 15) else { continue }
                 let lines = r.out.split(separator: "\n").map(String.init)
@@ -154,9 +155,9 @@ final class Emulator: ObservableObject {
                     continue
                 }
                 let ss = value("ss"), sf = value("sf")
-                guard !restarted, !ss.isEmpty, !sf.isEmpty else { continue }
+                guard !restarted, !ss.isEmpty, sf == "running" else { continue }
                 if let f = framework {
-                    if f.pid != ss {
+                    if f.count != ss {
                         restarted = true
                         HuskLog.log("ui", "the framework is restarting after the restore; waiting for its screen")
                     } else if booted && Date().timeIntervalSince(f.since) >= steady {
