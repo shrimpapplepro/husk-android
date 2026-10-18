@@ -1,0 +1,357 @@
+diff --git a/src/vrend/vrend_formats.c b/src/vrend/vrend_formats.c
+index 40ed4d55..7cb1c66d 100644
+--- a/src/vrend/vrend_formats.c
++++ b/src/vrend/vrend_formats.c
+@@ -21,6 +21,8 @@
+  * OTHER DEALINGS IN THE SOFTWARE.
+  *
+  **************************************************************************/
++#include "config.h"
++
+ #include <epoxy/gl.h>
+ 
+ #include "vrend_renderer.h"
+@@ -583,6 +585,29 @@ void vrend_build_format_list_common(void)
+ 
+   add_formats(packed_float_formats);
+   add_formats(exponent_float_formats);
++
++#if !(defined(HAVE_EPOXY_EGL_H) && defined(ENABLE_GBM_ALLOCATION))
++  /* HuskDroid: video frames (YV12, NV12) without GBM.
++   *
++   * A Linux host samples these through an EGL image of a GBM buffer, and the driver converts YUV to
++   * RGB on sampling. Without GBM (iOS: ANGLE on Metal) that path does not exist, the formats were not
++   * advertised, and the guest's minigbm faked YV12 as one R8 texture, which its GL driver then sampled
++   * as a single plane: every video showed its brightness plane over its own chroma planes, pink and
++   * green. Here they are sampler-only formats backed by an RGBA8 texture, and the transfer that
++   * uploads a frame converts it (vrend_yuv_emulated_transfer). */
++  {
++     const struct vrend_format_table *rgba = vrend_get_format_table_entry(VIRGL_FORMAT_R8G8B8A8_UNORM);
++     if (rgba && rgba->format) {
++        static const enum virgl_formats yuv[] = { VIRGL_FORMAT_YV12, VIRGL_FORMAT_NV12 };
++        for (unsigned i = 0; i < ARRAY_SIZE(yuv); i++) {
++           struct vrend_format_table entry = *rgba;
++           entry.format = yuv[i];
++           vrend_insert_format(&entry, VIRGL_BIND_SAMPLER_VIEW,
++                               rgba->flags & VIRGL_TEXTURE_CAN_TEXTURE_STORAGE);
++        }
++     }
++  }
++#endif
+ }
+ 
+ 
+diff --git a/src/vrend/vrend_renderer.c b/src/vrend/vrend_renderer.c
+index e6ae0074..85bd267a 100644
+--- a/src/vrend/vrend_renderer.c
++++ b/src/vrend/vrend_renderer.c
+@@ -591,6 +591,8 @@ struct vrend_sampler_view {
+    GLuint srgb_decode;
+    GLuint levels;
+    bool emulated_rect;
++   /* gl_id is one of texture->yuv_plane_tex: the resource owns it, not the view. */
++   bool yuv_plane;
+    struct vrend_resource *texture;
+ };
+ 
+@@ -941,6 +943,18 @@ static inline bool vrend_format_is_ds(enum virgl_formats format)
+    return tex_conv_table[format].bindings & VIRGL_BIND_DEPTH_STENCIL;
+ }
+ 
++/* HuskDroid: YV12/NV12 without GBM (see vrend_build_format_list_common and
++ * vrend_yuv_emulated_transfer). */
++static inline bool vrend_format_is_yuv_emulated(enum virgl_formats format)
++{
++#if !(defined(HAVE_EPOXY_EGL_H) && defined(ENABLE_GBM_ALLOCATION))
++   return format == VIRGL_FORMAT_YV12 || format == VIRGL_FORMAT_NV12;
++#else
++   (void)format;
++   return false;
++#endif
++}
++
+ static inline bool vrend_format_can_scanout(enum virgl_formats format)
+ {
+ #if defined(HAVE_EPOXY_EGL_H) && defined(ENABLE_GBM_ALLOCATION)
+@@ -1337,7 +1351,7 @@ vrend_surface_reference(struct vrend_surface **ptr, struct vrend_surface *surf)
+ 
+ static void vrend_destroy_sampler_view(struct vrend_sampler_view *samp)
+ {
+-   if (samp->texture->gl_id != samp->gl_id)
++   if (samp->texture->gl_id != samp->gl_id && !samp->yuv_plane)
+       glDeleteTextures(1, &samp->gl_id);
+    vrend_resource_reference(&samp->texture, NULL);
+    free(samp);
+@@ -2764,6 +2778,38 @@ static inline GLenum to_gl_swizzle(enum pipe_swizzle swizzle)
+    }
+ }
+ 
++/* HuskDroid: the per-plane textures of an emulated YV12/NV12 resource, made on first use. */
++static bool vrend_yuv_planes_ensure(struct vrend_resource *res)
++{
++   if (res->yuv_plane_tex[0])
++      return true;
++   const bool nv12 = res->base.format == VIRGL_FORMAT_NV12;
++   const GLsizei w = res->base.width0, h = res->base.height0;
++   const GLsizei cw = (w + 1) / 2, ch = (h + 1) / 2;
++   const int planes = nv12 ? 2 : 3;
++   glGenTextures(planes, res->yuv_plane_tex);
++   for (int i = 0; i < planes; i++) {
++      const bool uv = nv12 && i == 1;
++      glBindTexture(GL_TEXTURE_2D, res->yuv_plane_tex[i]);
++      glTexImage2D(GL_TEXTURE_2D, 0, uv ? GL_RG8 : GL_R8, i ? cw : w, i ? ch : h, 0,
++                   uv ? GL_RG : GL_RED, GL_UNSIGNED_BYTE, NULL);
++      /* Complete without mipmaps whatever sampler state arrives later. */
++      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 0);
++      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
++      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
++      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
++      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
++   }
++   glBindTexture(GL_TEXTURE_2D, 0);
++   static unsigned logged;
++   if (logged < 3) {
++      logged++;
++      fprintf(stderr, "[husk-yuv] %s resource %ux%u: %d plane textures\n",
++              nv12 ? "NV12" : "YV12", res->base.width0, res->base.height0, planes);
++   }
++   return true;
++}
++
+ int vrend_create_sampler_view(struct vrend_context *ctx,
+                               uint32_t handle,
+                               struct vrend_resource *res,
+@@ -2869,6 +2915,29 @@ int vrend_create_sampler_view(struct vrend_context *ctx,
+       view->srgb_decode = GL_SKIP_DECODE_EXT;
+    }
+ 
++   /* HuskDroid: a guest that cannot sample YUV asks for each plane of an imported YV12/NV12 buffer
++    * as its own view (R8 or RG8), with the plane index where a texture view keeps first_layer; on a GBM
++    * host the aux_plane EGL images answer that, below. Here the plane textures do. */
++   if (vrend_format_is_yuv_emulated(res->base.format)) {
++      if (view->format != res->base.format && view->target == GL_TEXTURE_2D) {
++         const unsigned plane = view->u.buf.first_element;
++         if (plane < ARRAY_SIZE(res->yuv_plane_tex) && vrend_yuv_planes_ensure(res) &&
++             res->yuv_plane_tex[plane]) {
++            view->gl_id = res->yuv_plane_tex[plane];
++            view->yuv_plane = true;
++            view->u.buf.first_element = 0;
++            view->levels = 1;
++            glBindTexture(GL_TEXTURE_2D, view->gl_id);
++            for (unsigned i = 0; i < 4; ++i)
++               glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_SWIZZLE_R + i, view->gl_swizzle[i]);
++            glBindTexture(GL_TEXTURE_2D, 0);
++            goto insert;
++         }
++      } else {
++         res->yuv_rgba_wanted = true;
++      }
++   }
++
+    if (!has_bit(view->texture->storage_bits, VREND_STORAGE_GL_BUFFER)) {
+       enum virgl_formats format;
+       bool needs_view = false;
+@@ -2995,6 +3064,7 @@ int vrend_create_sampler_view(struct vrend_context *ctx,
+       }
+    }
+ 
++insert:
+    ret_handle = vrend_renderer_object_insert(ctx, view, handle, VIRGL_OBJECT_SAMPLER_VIEW);
+    if (ret_handle == 0) {
+       vrend_resource_reference(&view->texture, NULL);
+@@ -9147,6 +9217,9 @@ void vrend_renderer_resource_destroy(struct vrend_resource *res)
+       glDeleteMemoryObjectsEXT(1, &res->memobj);
+    }
+ 
++   if (res->yuv_plane_tex[0])
++      glDeleteTextures(ARRAY_SIZE(res->yuv_plane_tex), res->yuv_plane_tex);
++
+ #if (defined(ENABLE_GBM) || defined(ENABLE_METAL)) && defined(HAVE_EPOXY_EGL_H)
+    if (res->egl_image) {
+       virgl_egl_image_destroy(egl, res->egl_image);
+@@ -10241,6 +10314,154 @@ static void vrend_renderer_blit_int(struct vrend_context *ctx,
+                                     struct vrend_resource *dst_res,
+                                     const struct pipe_blit_info *info);
+ 
++#if !(defined(HAVE_EPOXY_EGL_H) && defined(ENABLE_GBM_ALLOCATION))
++static inline uint8_t vrend_clamp_u8(int v)
++{
++   return v < 0 ? 0 : (v > 255 ? 255 : (uint8_t)v);
++}
++
++/* A frame arrives the way virgl_gbm_transfer expects it on a GBM host: the luma stride in `stride`, or
++ * in `level` (the kernel does not pass the stride, so minigbm smuggles it there), and the planes back
++ * to back -- Y, then V and U for YV12 (each at half the stride), or Y then interleaved UV for NV12 --
++ * each `layer_stride`-sized if that is given, packed otherwise. The whole frame is taken, whatever the
++ * box: the guest's backing always holds all of it, and a video frame is always written whole.
++ *
++ * Each plane goes to its own texture as it is (the guest's shader converts). Only if something samples
++ * the resource whole is it also converted to RGBA here: limited-range BT.601 below 720 lines and BT.709
++ * from there, as players guess when the stream does not say. Reading back is a no-op, because the
++ * guest's own backing already holds the YUV it wrote and there is nothing better to return. */
++static void vrend_yuv_upload_plane(GLuint tex, GLenum glformat, uint32_t bpp, uint32_t width,
++                                   uint32_t height, const uint8_t *src, uint32_t src_stride,
++                                   bool invert, uint8_t *scratch)
++{
++   const uint32_t row = width * bpp;
++   for (uint32_t y = 0; y < height; y++)
++      memcpy(scratch + (size_t)(invert ? height - 1 - y : y) * row, src + (size_t)y * src_stride, row);
++   glBindTexture(GL_TEXTURE_2D, tex);
++   glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, width, height, glformat, GL_UNSIGNED_BYTE, scratch);
++}
++
++static void vrend_yuv_to_rgba(const struct vrend_resource *res, const uint8_t *yuv, uint32_t stride,
++                              uint32_t cstride, uint64_t c0, uint64_t c1, bool invert, uint8_t *rgba)
++{
++   const bool nv12 = res->base.format == VIRGL_FORMAT_NV12;
++   const uint32_t w = res->base.width0, h = res->base.height0;
++   /* Fixed point, x1024. */
++   const bool bt709 = h >= 720;
++   const int cy = 1192;                              /* 1.164 */
++   const int crv = bt709 ? 1836 : 1634;              /* 1.793 / 1.596 */
++   const int cgu = bt709 ? 218 : 401;                /* 0.213 / 0.392 */
++   const int cgv = bt709 ? 546 : 833;                /* 0.533 / 0.813 */
++   const int cbu = bt709 ? 2163 : 2066;              /* 2.112 / 2.017 */
++
++   for (uint32_t row = 0; row < h; row++) {
++      const uint8_t *yp = yuv + (uint64_t)row * stride;
++      const uint8_t *c0p = yuv + c0 + (uint64_t)(row / 2) * cstride;
++      const uint8_t *c1p = yuv + c1 + (uint64_t)(row / 2) * cstride;
++      uint8_t *out = rgba + (size_t)(invert ? h - 1 - row : row) * w * 4;
++      for (uint32_t x = 0; x < w; x++) {
++         int u, v;
++         if (nv12) {
++            u = c0p[(x / 2) * 2] - 128;
++            v = c0p[(x / 2) * 2 + 1] - 128;
++         } else {
++            v = c0p[x / 2] - 128;
++            u = c1p[x / 2] - 128;
++         }
++         const int y = cy * (yp[x] - 16);
++         out[0] = vrend_clamp_u8((y + crv * v + 512) >> 10);
++         out[1] = vrend_clamp_u8((y - cgu * u - cgv * v + 512) >> 10);
++         out[2] = vrend_clamp_u8((y + cbu * u + 512) >> 10);
++         out[3] = 255;
++         out += 4;
++      }
++   }
++}
++
++static int vrend_yuv_emulated_transfer(struct vrend_resource *res,
++                                       const struct iovec *iov, int num_iovs,
++                                       const struct vrend_transfer_info *info,
++                                       int transfer_mode)
++{
++   if (transfer_mode != VIRGL_TRANSFER_TO_HOST)
++      return 0;
++
++   const bool nv12 = res->base.format == VIRGL_FORMAT_NV12;
++   const uint32_t w = res->base.width0, h = res->base.height0;
++   const uint32_t stride = info->stride ? info->stride : (info->level ? (uint32_t)info->level : w);
++   if (!w || !h || stride < w)
++      return EINVAL;
++
++   const uint32_t cw = (w + 1) / 2, ch = (h + 1) / 2;
++   const uint32_t cstride = nv12 ? stride : stride / 2;
++   const uint64_t y_size = info->layer_stride ? info->layer_stride : (uint64_t)stride * h;
++   const uint64_t c_size = info->layer_stride ? (nv12 ? info->layer_stride / 2 : info->layer_stride / 4)
++                                              : (uint64_t)cstride * (h / 2);
++   const uint64_t c0 = y_size;                       /* V (YV12) or UV (NV12) */
++   const uint64_t c1 = y_size + c_size;              /* U (YV12) */
++   const uint64_t total = nv12 ? c0 + (uint64_t)cstride * ch : c1 + (uint64_t)cstride * ch;
++   if (total > UINT32_MAX)
++      return EINVAL;
++
++   uint8_t *yuv = calloc(1, total);
++   uint8_t *scratch = malloc((size_t)w * h * 4);
++   if (!yuv || !scratch) {
++      free(yuv);
++      free(scratch);
++      return ENOMEM;
++   }
++   vrend_read_from_iovec(iov, num_iovs, info->offset, (char *)yuv, total);
++   const bool invert = vrend_state.use_core_profile && res->y_0_top;
++
++   GLint unpack_buffer = 0, row_length = 0, skip_rows = 0, skip_pixels = 0, alignment = 4;
++   glGetIntegerv(GL_PIXEL_UNPACK_BUFFER_BINDING, &unpack_buffer);
++   glGetIntegerv(GL_UNPACK_ROW_LENGTH, &row_length);
++   glGetIntegerv(GL_UNPACK_SKIP_ROWS, &skip_rows);
++   glGetIntegerv(GL_UNPACK_SKIP_PIXELS, &skip_pixels);
++   glGetIntegerv(GL_UNPACK_ALIGNMENT, &alignment);
++   glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
++   glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
++   glPixelStorei(GL_UNPACK_SKIP_ROWS, 0);
++   glPixelStorei(GL_UNPACK_SKIP_PIXELS, 0);
++   glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
++
++   if (vrend_yuv_planes_ensure(res)) {
++      vrend_yuv_upload_plane(res->yuv_plane_tex[0], GL_RED, 1, w, h, yuv, stride, invert, scratch);
++      if (nv12) {
++         vrend_yuv_upload_plane(res->yuv_plane_tex[1], GL_RG, 2, cw, ch, yuv + c0, cstride, invert, scratch);
++      } else {
++         vrend_yuv_upload_plane(res->yuv_plane_tex[1], GL_RED, 1, cw, ch, yuv + c0, cstride, invert, scratch);
++         vrend_yuv_upload_plane(res->yuv_plane_tex[2], GL_RED, 1, cw, ch, yuv + c1, cstride, invert, scratch);
++      }
++   }
++
++   if (res->yuv_rgba_wanted) {
++      vrend_yuv_to_rgba(res, yuv, stride, cstride, c0, c1, invert, scratch);
++      glBindTexture(res->target, res->gl_id);
++      glTexSubImage2D(res->target, 0, 0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, scratch);
++   }
++   glBindTexture(GL_TEXTURE_2D, 0);
++
++   glBindBuffer(GL_PIXEL_UNPACK_BUFFER, unpack_buffer);
++   glPixelStorei(GL_UNPACK_ROW_LENGTH, row_length);
++   glPixelStorei(GL_UNPACK_SKIP_ROWS, skip_rows);
++   glPixelStorei(GL_UNPACK_SKIP_PIXELS, skip_pixels);
++   glPixelStorei(GL_UNPACK_ALIGNMENT, alignment);
++
++   static unsigned logged;
++   if (logged < 3) {
++      logged++;
++      fprintf(stderr, "[husk-yuv] %s frame %ux%u: stride %u, layer_stride %u, offset %u, box %d,%d %dx%d%s%s\n",
++              nv12 ? "NV12" : "YV12", w, h, stride, info->layer_stride, (unsigned)info->offset,
++              info->box->x, info->box->y, info->box->width, info->box->height,
++              invert ? ", inverted" : "", res->yuv_rgba_wanted ? ", +rgba" : "");
++   }
++   free(yuv);
++   free(scratch);
++   return 0;
++}
++#endif
++
+ static int vrend_renderer_transfer_internal(struct vrend_context *ctx,
+                                             struct vrend_resource *res,
+                                             const struct vrend_transfer_info *info,
+@@ -10275,6 +10496,13 @@ static int vrend_renderer_transfer_internal(struct vrend_context *ctx,
+    }
+ #endif
+ 
++#if !(defined(HAVE_EPOXY_EGL_H) && defined(ENABLE_GBM_ALLOCATION))
++   /* Before the bounds checks: they size the transfer from the format, and a planar format has no
++    * per-pixel size to give them. `level` carries the stride here, not a mip level. */
++   if (vrend_format_is_yuv_emulated(res->base.format))
++      return vrend_yuv_emulated_transfer(res, iov, num_iovs, info, transfer_mode);
++#endif
++
+    if (!resource_contains_box(res, info->box, info->level)) {
+       vrend_report_context_error(ctx, VIRGL_ERROR_CTX_TRANSFER_IOV_BOUNDS, res->gl_id);
+       return EINVAL;
+diff --git a/src/vrend/vrend_renderer.h b/src/vrend/vrend_renderer.h
+index 814eb7e3..b5e690f8 100644
+--- a/src/vrend/vrend_renderer.h
++++ b/src/vrend/vrend_renderer.h
+@@ -107,6 +107,12 @@ struct vrend_resource {
+    uint64_t mipmap_offsets[VR_MAX_TEXTURE_2D_LEVELS];
+    void *gbm_bo, *egl_image;
+    void *aux_plane_egl_image[VIRGL_GBM_MAX_PLANES];
++   /* HuskDroid: YV12/NV12 without GBM. One texture per plane, filled straight from each uploaded
++    * frame (R8 Y, R8 V, R8 U for YV12; R8 Y, RG8 UV for NV12) and handed to the guest's per-plane
++    * sampler views, so the guest's own shader does YUV to RGB as it would on a GBM host. */
++   GLuint yuv_plane_tex[3];
++   /* Something sampled the resource whole (not plane by plane): keep its RGBA texture converted too. */
++   bool yuv_rgba_wanted;
+ #ifdef WIN32
+    ID3D11Texture2D *d3d_tex2d;
+ #endif
