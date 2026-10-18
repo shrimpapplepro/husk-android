@@ -417,7 +417,7 @@ enum AndroidFiles {
 
     @discardableResult
     static func push(_ file: URL, into dir: String? = nil) throws -> String {
-        let dest = "\(dir ?? folder(for: file))/\(file.lastPathComponent)"
+        let dest = "\(dir ?? folder(for: file))/\(androidName(file.lastPathComponent))"
         HuskLog.log("files", "sending \(file.lastPathComponent) (\(fileSize(file)) bytes) to \(dest)")
         try GuestBridge.shared.push(file, to: dest) { _ in }
         // MediaProvider's scan_file: the legacy MEDIA_SCANNER broadcast is ignored on this Android.
@@ -425,6 +425,22 @@ enum AndroidFiles {
             "content call --uri content://media --method scan_file --arg \(AndroidHost.quote(dest))", timeout: 30)
         HuskLog.log("files", "sent \(file.lastPathComponent); media scan \(scan?.out.contains("Result") == true ? "ok" : "skipped")")
         return dest
+    }
+
+    /// A name Android's shared storage takes as it is: the characters its FAT-style rules refuse become
+    /// "_", and the name fits in 255 bytes of UTF-8 with its extension kept. Names saved from the web
+    /// carry all of them ("... on X: "https:__t.co_..." _ X.mp4").
+    static func androidName(_ name: String) -> String {
+        let banned = CharacterSet(charactersIn: "/\\:*?\"<>|'").union(.controlCharacters)
+        var clean = String(name.unicodeScalars.map { banned.contains($0) ? "_" : Character($0) })
+            .trimmingCharacters(in: .whitespaces)
+        while clean.contains("__") { clean = clean.replacingOccurrences(of: "__", with: "_") }
+        let ext = (clean as NSString).pathExtension
+        var stem = (clean as NSString).deletingPathExtension
+        let limit = 255 - (ext.isEmpty ? 0 : ext.utf8.count + 1)
+        while stem.utf8.count > limit { stem.removeLast() }
+        if stem.isEmpty || stem.hasPrefix(".") { stem = "file" + stem }
+        return ext.isEmpty ? stem : stem + "." + ext
     }
 
     private static func fileSize(_ url: URL) -> Int {
