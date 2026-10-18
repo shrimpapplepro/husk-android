@@ -136,12 +136,17 @@ final class Emulator: ObservableObject {
             var how = ""
             while !ready && Date().timeIntervalSince(began) < 240 {
                 Thread.sleep(forTimeInterval: 2)
+                // Nothing past the getprops runs until surfaceflinger does: screencap waits for it
+                // forever, and a waiting command holds the one shell connection -- the one the restore
+                // needs to start surfaceflinger. That deadlock is what build 590 shipped. The timeouts
+                // keep any later stall from holding it either.
                 guard let r = try? GuestBridge.shared.run(
-                    "getprop sys.boot_completed; echo sf=$(getprop init.svc.surfaceflinger); "
-                    + "echo wake=$(dumpsys power 2>/dev/null | grep -m1 mWakefulness=); "
-                    + "echo focus=$(dumpsys window 2>/dev/null | grep -m1 mCurrentFocus); "
-                    + "echo shot=$(screencap -p 2>/dev/null | wc -c)",
-                    timeout: 20) else { continue }
+                    "getprop sys.boot_completed; sf=$(getprop init.svc.surfaceflinger); echo sf=$sf; "
+                    + "[ \"$sf\" = running ] || exit 0; "
+                    + "echo wake=$(timeout 8 dumpsys power 2>/dev/null | grep -m1 mWakefulness=); "
+                    + "echo focus=$(timeout 8 dumpsys window 2>/dev/null | grep -m1 mCurrentFocus); "
+                    + "echo shot=$(timeout 8 screencap -p 2>/dev/null | wc -c)",
+                    timeout: 30) else { continue }
                 let lines = r.out.split(separator: "\n").map(String.init)
                 func value(_ key: String) -> String {
                     lines.first { $0.hasPrefix(key + "=") }.map { String($0.dropFirst(key.count + 1)).trimmingCharacters(in: .whitespaces) } ?? ""
