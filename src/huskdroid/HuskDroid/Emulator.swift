@@ -111,60 +111,55 @@ final class Emulator: ObservableObject {
     /// GPU handles, Android's watchdog restarts the framework (~60 s), and only the screen that restart
     /// enables counts -- a boot_progress_enable_screen event stamped after the restore. Three minutes
     /// is the cap, so the background can never stay up for good.
-    /// When the loading background can go. A cold boot is up at sys.boot_completed. A restore comes back
-    /// in one of two ways: either the framework restarts (zygote is killed a few seconds after the display
-    /// returns, and the new framework enables the screen again ~45 s later), or it simply carries on.
-    /// Waiting only for the restart's boot_progress_enable_screen hid a working Android for the full 180 s
-    /// when it carried on, so a restore is also up once system_server's start count has held, with
-    /// surfaceflinger running, for `steady` seconds; a new count means a restart, and then it waits.
-    /// (Not pidof: the shell user sees only its own processes in /proc.)
+    /// When the loading background can go: once Android has a focused window (the lock screen, or an
+    /// app) and is awake. Nothing weaker counts; "booted" and "surfaceflinger running" were both true
+    /// over a black screen.
+    ///
+    /// A restore needs help to get there. Saving stops surfaceflinger and keeps system_server, and on
+    /// restore system_server is still bound to the compositor that was stopped: it never draws to the
+    /// new one, so the screen stays black with no focus, however long it waits. Sometimes system_server
+    /// restarted by itself and the screen came back; mostly it did not. So once the new surfaceflinger
+    /// is running with nothing focused, the framework is restarted (init's ctl.restart, which the shell
+    /// may set where ctl.stop is refused); a fresh system_server shows the lock screen ~40 s later,
+    /// and the network and the shell bridge survive it. If Android is asleep it is woken.
     private func watchForScreen() {
         screenReady = false
         let thread = Thread {
             let began = Date()
-            let steady: TimeInterval = 15
-            var restoreUptimeMs: Int?
-            var framework: (count: String, since: Date)?
             var restarted = false
+            var lastWake = Date.distantPast
             var ready = false
             var how = ""
-            while !ready && Date().timeIntervalSince(began) < 180 {
+            while !ready && Date().timeIntervalSince(began) < 240 {
                 Thread.sleep(forTimeInterval: 2)
                 guard let r = try? GuestBridge.shared.run(
-                    "cat /proc/uptime; getprop sys.boot_completed; "
-                    + "echo ss=$(getprop sys.system_server.start_count); echo sf=$(getprop init.svc.surfaceflinger); "
-                    + "logcat -b events -d -t 4000 2>/dev/null | grep boot_progress_enable_screen | tail -3",
+                    "getprop sys.boot_completed; echo sf=$(getprop init.svc.surfaceflinger); "
+                    + "echo focus=$(dumpsys window 2>/dev/null | grep -m1 mCurrentFocus); "
+                    + "echo wake=$(dumpsys power 2>/dev/null | grep -m1 mWakefulness=)",
                     timeout: 15) else { continue }
                 let lines = r.out.split(separator: "\n").map(String.init)
-                guard let uptime = lines.first.flatMap({ Double($0.split(separator: " ").first ?? "") }) else { continue }
-                let booted = lines.count > 1 && lines[1].trimmingCharacters(in: .whitespaces) == "1"
                 func value(_ key: String) -> String {
                     lines.first { $0.hasPrefix(key + "=") }.map { String($0.dropFirst(key.count + 1)).trimmingCharacters(in: .whitespaces) } ?? ""
                 }
-                let screens = lines.compactMap { line -> Int? in
-                    guard let r = line.range(of: "boot_progress_enable_screen: ") else { return nil }
-                    return Int(line[r.upperBound...].trimmingCharacters(in: .whitespaces))
-                }
-                guard QemuRunner.didRestore else {
-                    ready = booted
+                let booted = lines.first?.trimmingCharacters(in: .whitespaces) == "1"
+                let focus = value("focus"), awake = value("wake").contains("Awake")
+                let focused = focus.contains("Window{")
+                guard booted, value("sf") == "running" else { continue }
+                if focused && awake {
+                    ready = true
+                    how = " (" + (focus.contains("NotificationShade") ? "lock screen" : "app") + ")"
+                        + (restarted ? ", after restarting the framework" : "")
                     continue
                 }
-                if restoreUptimeMs == nil { restoreUptimeMs = Int(uptime * 1000) - 3000 }
-                if booted && screens.contains(where: { $0 > restoreUptimeMs! }) {
-                    ready = true; how = " (the framework restarted)"
-                    continue
+                if !awake && Date().timeIntervalSince(lastWake) > 10 {
+                    lastWake = Date()
+                    HuskLog.log("ui", "Android is asleep; waking it")
+                    _ = try? GuestBridge.shared.run("input keyevent KEYCODE_WAKEUP", timeout: 15)
                 }
-                let ss = value("ss"), sf = value("sf")
-                guard !restarted, !ss.isEmpty, sf == "running" else { continue }
-                if let f = framework {
-                    if f.count != ss {
-                        restarted = true
-                        HuskLog.log("ui", "the framework is restarting after the restore; waiting for its screen")
-                    } else if booted && Date().timeIntervalSince(f.since) >= steady {
-                        ready = true; how = " (the framework carried on)"
-                    }
-                } else {
-                    framework = (ss, Date())
+                if QemuRunner.didRestore && !focused && !restarted {
+                    restarted = true
+                    HuskLog.log("ui", "restored with nothing on screen; restarting Android's framework")
+                    _ = try? GuestBridge.shared.run("setprop ctl.restart zygote", timeout: 15)
                 }
             }
             HuskLog.log("ui", "Android's screen is up after \(Int(Date().timeIntervalSince(began))) s"
