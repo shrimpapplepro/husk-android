@@ -16,16 +16,23 @@ final class Companion: ObservableObject {
 
     @Published private(set) var link: Link = .searching
     var isLinked: Bool { if case .linked = link { return true }; return false }
+    /// How the companion is reached right now, for the UI: "Tailscale" or "Wi-Fi".
+    var route: String? { base.map(Tailscale.route) }
+    /// Whether any configured address of the Mac goes through Tailscale.
+    var triesTailscale: Bool { bases.contains { Tailscale.carries($0.host ?? "") } }
     /// The companion's host, for connections that are not HTTP (tunnels dial back to it).
     var host: String? { base?.host }
     var tunnelToken: String { token }
 
     private let token = Bundle.main.object(forInfoDictionaryKey: "HDCompanionToken") as? String ?? ""
-    /// "host:port,host:port" from config/local.env (HUSKDROID_MAC_HOSTS), tried in order.
-    private let hosts = (Bundle.main.object(forInfoDictionaryKey: "HDCompanionHosts") as? String ?? "")
+    /// "host:port,host:port,https://name.ts.net/huskdroid" from config/local.env (HUSKDROID_MAC_HOSTS),
+    /// tried in order. A bare host:port is plain HTTP; a full URL (a Tailscale Funnel) keeps its path.
+    private let bases: [URL] = (Bundle.main.object(forInfoDictionaryKey: "HDCompanionHosts") as? String ?? "")
         .split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        .compactMap { URL(string: $0.contains("://") ? $0 : "http://\($0)") }
     private var base: URL?
     private var started = false
+    private var lookSoon = false
     private let shipper = LogShipper()
 
     /// Short requests: status, hello, logs, results.
@@ -46,7 +53,13 @@ final class Companion: ObservableObject {
     func start() {
         guard !started else { return }
         started = true
+        HuskLog.log("companion", "Tailscale app \(Tailscale.canOpen ? "found" : "not found")")
         Task { await self.maintain() }
+    }
+
+    /// Look for the Mac now rather than at the next 10 s tick: back from the Tailscale app, or in the foreground again.
+    func lookNow() {
+        if base == nil { lookSoon = true }
     }
 
     /// Find the companion, then keep the command loop and log shipping running; look again if it goes away.
@@ -57,7 +70,7 @@ final class Companion: ObservableObject {
                 if let found = await findHost() {
                     base = found
                     link = .linked(found.host ?? "?")
-                    HuskLog.log("companion", "linked to \(found.absoluteString)")
+                    HuskLog.log("companion", "linked to \(found.absoluteString) over \(route ?? "?")")
                     await hello()
                     shipper.start { [weak self] text in await self?.post("/v1/logs", body: Data(text.utf8), type: "text/plain") ?? false }
                     Task { await self.commandLoop() }
@@ -65,17 +78,21 @@ final class Companion: ObservableObject {
                     link = .offline(token.isEmpty ? "This build has no companion token." : "Not reachable on Wi-Fi or Tailscale.")
                 }
             }
-            try? await Task.sleep(nanoseconds: base == nil ? 10_000_000_000 : 5_000_000_000)
+            // In half-second steps, so lookNow() is answered within one.
+            for _ in 0..<(base == nil ? 20 : 10) where !lookSoon {
+                try? await Task.sleep(nanoseconds: 500_000_000)
+            }
+            lookSoon = false
         }
     }
 
     private func findHost() async -> URL? {
         guard !token.isEmpty else { return nil }
-        for host in hosts {
-            guard let url = URL(string: "http://\(host)") else { continue }
+        for url in bases {
             var req = URLRequest(url: url.appendingPathComponent("v1/status"))
             authorise(&req)
-            req.timeoutInterval = 2.5
+            // A Funnel goes out to Tailscale's relay and back: about 1.7 s, against milliseconds at home.
+            req.timeoutInterval = url.scheme == "https" ? 5 : 2.5
             if let (_, resp) = try? await quick.data(for: req), (resp as? HTTPURLResponse)?.statusCode == 200 {
                 return url
             }
@@ -96,7 +113,9 @@ final class Companion: ObservableObject {
     }
 
     private func request(_ path: String, method: String = "GET", body: Data? = nil, type: String? = nil) -> URLRequest? {
-        guard let base, let url = URL(string: path, relativeTo: base) else { return nil }
+        // Appended, not resolved: resolving "/v1/..." against a Funnel URL would drop its /huskdroid prefix.
+        let root = base?.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        guard let root, let url = URL(string: root + path) else { return nil }
         var req = URLRequest(url: url)
         req.httpMethod = method
         req.httpBody = body
@@ -225,5 +244,30 @@ final class LogShipper {
         offsets[path] = from + UInt64(lastNewline + 1)
         let text = String(decoding: data[..<(lastNewline + 1)], as: UTF8.self)
         return tag.isEmpty ? text : text.split(separator: "\n").map { tag + $0 + "\n" }.joined()
+    }
+}
+
+/// The usual way to the Mac away from the home Wi-Fi. JIT needs it on both ways: the companion reaches
+/// the phone's Tailscale address, and the app reaches the Mac's.
+enum Tailscale {
+    /// Tailscale hands out addresses in 100.64.0.0/10 and MagicDNS names under .ts.net.
+    static func carries(_ host: String) -> Bool {
+        if host.hasSuffix(".ts.net") { return true }
+        let parts = host.split(separator: ".").compactMap { Int($0) }
+        return parts.count == 4 && parts[0] == 100 && (64...127).contains(parts[1])
+    }
+
+    static func route(_ url: URL) -> String {
+        guard let host = url.host, carries(host) else { return "Wi-Fi" }
+        return url.scheme == "https" ? "Tailscale Funnel" : "Tailscale"
+    }
+
+    private static let app = URL(string: "tailscale://")!
+
+    /// Needs "tailscale" in LSApplicationQueriesSchemes; false when the app is not installed.
+    @MainActor static var canOpen: Bool { UIApplication.shared.canOpenURL(app) }
+
+    @MainActor static func open() {
+        UIApplication.shared.open(app) { ok in HuskLog.log("companion", "opening Tailscale: \(ok ? "OK" : "FAILED")") }
     }
 }
