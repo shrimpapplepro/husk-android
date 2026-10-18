@@ -244,7 +244,7 @@ struct StartCard: View {
 
     /// Away from home the Mac is usually only a Tailscale hop away: offer the switch when it can't be reached.
     private var offerTailscale: Bool {
-        guard companion.triesTailscale, Tailscale.canOpen else { return false }
+        guard companion.triesTailscale else { return false }
         if case .offline = companion.link { return true }
         if case let .failed(why) = jit.phase { return why.contains("reachable") }
         return false
@@ -342,7 +342,7 @@ struct ControlPanel: View {
         VStack(alignment: .leading, spacing: 10) {
             row("bolt.fill", "JIT", jitText) {
                 if jit.phase != .on {
-                    if !companion.isLinked, companion.triesTailscale, Tailscale.canOpen {
+                    if !companion.isLinked, companion.triesTailscale {
                         Button("Open Tailscale") { Tailscale.open() }
                     } else {
                         Button(jit.phase.isBusy ? "Working…" : "Turn On") { jit.request() }

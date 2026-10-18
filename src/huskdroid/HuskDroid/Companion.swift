@@ -53,7 +53,7 @@ final class Companion: ObservableObject {
     func start() {
         guard !started else { return }
         started = true
-        HuskLog.log("companion", "Tailscale app \(Tailscale.canOpen ? "found" : "not found")")
+        HuskLog.log("companion", "Tailscale button: \(Tailscale.how)")
         Task { await self.maintain() }
     }
 
@@ -262,12 +262,21 @@ enum Tailscale {
         return url.scheme == "https" ? "Tailscale Funnel" : "Tailscale"
     }
 
-    private static let app = URL(string: "tailscale://")!
+    /// The Mac app answers tailscale://; what the iOS app registers is not documented, so the app
+    /// tries each (all listed in LSApplicationQueriesSchemes) and logs the one that works.
+    private static let schemes = ["tailscale", "io.tailscale.ipn.ios", "io.tailscale.ipn"]
+    /// Tailscale's App Store page (io.tailscale.ipn.ios): it always opens, and shows Open when installed.
+    private static let store = URL(string: "itms-apps://apps.apple.com/app/id1470499037")!
 
-    /// Needs "tailscale" in LSApplicationQueriesSchemes; false when the app is not installed.
-    @MainActor static var canOpen: Bool { UIApplication.shared.canOpenURL(app) }
+    @MainActor private static var direct: URL? {
+        schemes.lazy.compactMap { URL(string: "\($0)://") }.first { UIApplication.shared.canOpenURL($0) }
+    }
+
+    /// For the log: how the button will get to Tailscale.
+    @MainActor static var how: String { direct.map { "opens \($0.absoluteString)" } ?? "no URL scheme answers; opens its App Store page" }
 
     @MainActor static func open() {
-        UIApplication.shared.open(app) { ok in HuskLog.log("companion", "opening Tailscale: \(ok ? "OK" : "FAILED")") }
+        let url = direct ?? store
+        UIApplication.shared.open(url) { ok in HuskLog.log("companion", "opening Tailscale (\(url.absoluteString)): \(ok ? "OK" : "FAILED")") }
     }
 }
