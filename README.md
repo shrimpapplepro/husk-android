@@ -19,7 +19,7 @@ Husk's emulator engine and replaces everything around it. Husk's own README is k
   Tailscale Funnel keeps the app in touch with the companion from any network.
 - **Sound.** Android's audio plays on the iPhone.
 - **Snapshots.** Save & Quit stores the whole machine; the next start restores it instead of booting
-  (~45 s until the screen is back, against ~60 s to 2 min for a cold boot).
+  (~75–90 s to the lock screen, against ~2 min for a cold boot).
 - **Getting things in.** Install APKs, send photos, videos and files (sorted into Pictures, Music or
   Download and indexed, so Android's Gallery and Files see them), or use adb from the Mac.
 - **Remote control for debugging.** The app streams its logs to the Mac, and `huskctl` runs shell
@@ -58,8 +58,11 @@ Engine fixes in shared files (`src/app/Husk`, `src/ios-jit`, `scripts`) are writ
 
 ## Known limits
 
-- **A restore restarts Android's screen.** The GPU's state cannot be saved, so after a restore Android's
-  framework restarts once (~45 s, under the loading glow). The software display would avoid it, but it
+- **A restore restarts Android's framework.** The GPU's state cannot be saved: after a restore,
+  system_server is still bound to the compositor the save stopped and draws nothing. The app sees the
+  black screen (Android's own screen capture) and restarts the framework itself; the lock screen
+  follows ~40 s later, under the loading glow. The loading glow only lifts once that capture has
+  something on it. The software display would avoid it, but it
   was measured and rejected: a 2 min 47 s cold boot and "isn't responding" dialogs.
 - **Saving in a running session** would restart the framework for the same reason, so nothing saves
   until Save & Quit. A restore also returns Android's storage to the save.
