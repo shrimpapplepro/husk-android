@@ -12,6 +12,7 @@ final class HuskDroidDelegate: NSObject, UIApplicationDelegate {
 struct HuskDroidApp: App {
     @UIApplicationDelegateAdaptor(HuskDroidDelegate.self) private var delegate
     @ObservedObject private var companion = Companion.shared
+    @Environment(\.scenePhase) private var scenePhase
 
     init() {
         Emulator.shared.prepare()
@@ -23,8 +24,17 @@ struct HuskDroidApp: App {
             RootView()
                 // Ask for JIT as soon as the Mac answers: by the time Android is downloaded or
                 // the panel is opened, it is already on.
+                // A failed try counts too: it usually failed because the Mac was out of reach (Tailscale off).
                 .onChange(of: companion.isLinked) { _, linked in
-                    if linked, !JITBootstrap.prewarmed, JITFlow.shared.phase == .off { JITFlow.shared.request() }
+                    guard linked, !JITBootstrap.prewarmed else { return }
+                    switch JITFlow.shared.phase {
+                    case .off, .failed: JITFlow.shared.request()
+                    default: break
+                    }
+                }
+                // Back from the Tailscale app (or anywhere): look for the Mac at once.
+                .onChange(of: scenePhase) { _, phase in
+                    if phase == .active { Companion.shared.lookNow() }
                 }
         }
     }

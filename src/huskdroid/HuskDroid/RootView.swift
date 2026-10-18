@@ -210,10 +210,16 @@ struct StartCard: View {
                 Button("Turn On JIT") { jit.request() }
                     .disabled(!companion.isLinked)
             }
+            if offerTailscale {
+                Button { Tailscale.open() } label: {
+                    Label("Open Tailscale", systemImage: "network")
+                }
+                .buttonStyle(.glass)
+            }
         default:
             VStack(spacing: 8) {
                 ProgressView()
-                Text(jit.steps.last ?? "Asking your Mac…")
+                Text(jit.steps.last ?? "Asking your Mac over \(companion.route ?? "the network")…")
                     .font(.footnote).foregroundStyle(.secondary).lineLimit(2)
                     .multilineTextAlignment(.center)
             }
@@ -228,10 +234,20 @@ struct StartCard: View {
     private var jitDetail: String {
         if case let .failed(why) = jit.phase { return why }
         switch companion.link {
-        case .linked(let host): return "Your Mac (\(host)) turns it on over the network."
+        case .linked(let host): return "Your Mac (\(host)) turns it on over \(companion.route ?? "the network")."
         case .searching: return "Looking for the companion on your Mac…"
-        case .offline(let why): return why + " Is the companion running?"
+        case .offline(let why):
+            return why + (companion.triesTailscale ? " Is the companion running, and Tailscale connected here?"
+                                                   : " Is the companion running?")
         }
+    }
+
+    /// Away from home the Mac is usually only a Tailscale hop away: offer the switch when it can't be reached.
+    private var offerTailscale: Bool {
+        guard companion.triesTailscale, Tailscale.canOpen else { return false }
+        if case .offline = companion.link { return true }
+        if case let .failed(why) = jit.phase { return why.contains("reachable") }
+        return false
     }
 
     private var failure: String? {
@@ -326,8 +342,12 @@ struct ControlPanel: View {
         VStack(alignment: .leading, spacing: 10) {
             row("bolt.fill", "JIT", jitText) {
                 if jit.phase != .on {
-                    Button(jit.phase.isBusy ? "Working…" : "Turn On") { jit.request() }
-                        .disabled(jit.phase.isBusy || !companion.isLinked)
+                    if !companion.isLinked, companion.triesTailscale, Tailscale.canOpen {
+                        Button("Open Tailscale") { Tailscale.open() }
+                    } else {
+                        Button(jit.phase.isBusy ? "Working…" : "Turn On") { jit.request() }
+                            .disabled(jit.phase.isBusy || !companion.isLinked)
+                    }
                 }
             }
             row("apps.iphone", "Android", androidText) {
@@ -398,7 +418,7 @@ struct ControlPanel: View {
     private var jitText: String {
         switch jit.phase {
         case .off: return "Off"
-        case .asking: return "Asking your Mac…"
+        case .asking: return "Asking your Mac over \(companion.route ?? "the network")…"
         case .attaching: return jit.steps.last ?? "Attaching…"
         case .claiming: return "Preparing 512 MB…"
         case .on: return "On for this session"
@@ -415,7 +435,7 @@ struct ControlPanel: View {
 
     private var macText: String {
         switch companion.link {
-        case .linked(let host): return "Linked (\(host)) · logs streaming"
+        case .linked(let host): return "Linked over \(companion.route ?? "?") (\(host)) · logs streaming"
         case .searching: return "Looking…"
         case .offline(let why): return why
         }

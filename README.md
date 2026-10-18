@@ -14,8 +14,9 @@ Husk's emulator engine and replaces everything around it. Husk's own README is k
 - **Android, full screen.** LineageOS on a virtual GPU (virtio-gpu-gl through virglrenderer and ANGLE to
   Metal), 360×672 at 160 dpi, 4 GiB of RAM, 4 cores. Touch, keyboard, and Android's system buttons.
 - **JIT without a cable, a VPN or StikDebug.** The app asks a companion on your Mac; the companion
-  reaches the iPhone over the network (same Wi-Fi, or any route between the two) and services the
-  JIT request in about 2 seconds.
+  reaches the iPhone over the network (same Wi-Fi, Tailscale, or any route between the two) and services
+  the JIT request in about 2 seconds. Off Wi-Fi, the JIT screen offers Open Tailscale, and an optional
+  Tailscale Funnel keeps the app in touch with the companion from any network.
 - **Sound.** Android's audio plays on the iPhone.
 - **Snapshots.** Save & Quit stores the whole machine; the next start restores it instead of booting
   (~45 s until the screen is back, against ~60 s to 2 min for a cold boot).

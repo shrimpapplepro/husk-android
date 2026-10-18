@@ -34,12 +34,30 @@ Two connections must work, and both are plain TCP:
 - The Mac's address: `ipconfig getifaddr en0` (or `en1`), plus `:8790`.
 - Addresses from DHCP can change: reserve both on the router, or the setup breaks when a lease renews.
 
-**Away from that Wi-Fi**, any route that carries both connections works. Work out what this user's
-setup can actually do and add those addresses after the Wi-Fi ones (each list is tried in order). A
-mesh VPN both devices are on (Tailscale, ZeroTier, WireGuard) is the usual answer; use the tests above to
-keep only addresses that really connect. Do not open these ports to the internet with port forwarding:
-lockdownd and the companion would face the whole internet, with the token as the companion's only
-protection. If no route exists, JIT works on the home Wi-Fi only; tell the user so.
+**Away from that Wi-Fi**, any route that carries both connections works. Ask the user whether they use
+Tailscale (or another mesh VPN: ZeroTier, WireGuard); work out what their setup can actually do and add
+those addresses after the Wi-Fi ones (each list is tried in order). Use the tests above to keep only
+addresses that really connect. If no route exists, JIT works on the home Wi-Fi only; tell the user so.
+
+**Tailscale**, when both devices are on the same tailnet:
+
+- The addresses: `tailscale ip -4` on the Mac; `tailscale status` lists the iPhone's `100.x` address.
+  Add the iPhone's to `HUSKDROID_PHONE_HOSTS` and `<mac 100.x>:8790` to `HUSKDROID_MAC_HOSTS`.
+- On iOS, Tailscale's VPN slot rules out LocalDevVPN/StikDebug, which is why JIT here goes through the Mac.
+- The app names the route it found ("Linked over Tailscale"). If the Mac cannot be reached, the JIT
+  screen offers **Open Tailscale**; back in HuskDroid it looks for the Mac at once, and JIT is asked for
+  again as soon as it answers.
+- **Funnel**, optional, for the companion only: `tailscale funnel --bg --set-path /huskdroid
+  http://127.0.0.1:8790`, then add `https://<mac>.<tailnet>.ts.net/huskdroid` **last** in
+  `HUSKDROID_MAC_HOSTS` (it goes out through Tailscale's relay and is slower). Test it from off the
+  tailnet: `curl --resolve <name>:443:$(dig +short @1.1.1.1 <name>) https://<name>/huskdroid/v1/status`
+  gives `401`. It lets the app reach the companion (logs, commands, the JIT request) from any network,
+  but JIT itself still needs the Mac → iPhone connection, so the iPhone must still be reachable on 62078.
+  Port 8791 (adb tunnels) is not carried.
+
+Never expose lockdownd (62078) to the internet, and never forward the companion's ports on the router:
+plain HTTP there would carry the token in the clear. A Funnel is HTTPS and only the companion's
+token-checked HTTP API.
 
 `build.sh` reads it (the Mac hosts go into the app's Info.plist); `tools/companion/install.sh` copies it to
 `~/.config/huskdroid/config.env`, where the companion reads the iPhone values. Also machine-specific:

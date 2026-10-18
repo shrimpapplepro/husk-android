@@ -27,12 +27,17 @@
 	<string>$(HUSKDROID_TOKEN)</string>
 	<key>HDCompanionHosts</key>
 	<string>$(HUSKDROID_MAC_HOSTS)</string>
-	<!-- Plain HTTP to the companion, on the LAN and on Tailscale (100.x is not "local"). -->
+	<!-- Plain HTTP to the companion, on the LAN and on Tailscale (100.x is not "local"); a Funnel is HTTPS. -->
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsArbitraryLoads</key>
 		<true/>
 	</dict>
+	<!-- canOpenURL for the JIT screen's Open Tailscale button. -->
+	<key>LSApplicationQueriesSchemes</key>
+	<array>
+		<string>tailscale</string>
+	</array>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>HuskDroid talks to its companion on your Mac for JIT and logs.</string>
 	<!-- Android's sound keeps playing while the screen is locked. -->
