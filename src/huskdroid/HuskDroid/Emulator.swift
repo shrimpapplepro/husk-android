@@ -111,21 +111,25 @@ final class Emulator: ObservableObject {
     /// GPU handles, Android's watchdog restarts the framework (~60 s), and only the screen that restart
     /// enables counts -- a boot_progress_enable_screen event stamped after the restore. Three minutes
     /// is the cap, so the background can never stay up for good.
-    /// When the loading background can go: once Android has a focused window (the lock screen, or an
-    /// app) and is awake. Nothing weaker counts; "booted" and "surfaceflinger running" were both true
-    /// over a black screen.
+    /// When the loading background can go: once Android is awake and its own screen capture has something
+    /// on it (the lock screen, or an app). Nothing weaker counts. "Booted", "surfaceflinger running" and
+    /// even a focused window were all true over a black screen: focus is system_server's memory of
+    /// before the save, not proof that anything reaches the display.
     ///
     /// A restore needs help to get there. Saving stops surfaceflinger and keeps system_server, and on
     /// restore system_server is still bound to the compositor that was stopped: it never draws to the
-    /// new one, so the screen stays black with no focus, however long it waits. Sometimes system_server
-    /// restarted by itself and the screen came back; mostly it did not. So once the new surfaceflinger
-    /// is running with nothing focused, the framework is restarted (init's ctl.restart, which the shell
-    /// may set where ctl.stop is refused); a fresh system_server shows the lock screen ~40 s later,
-    /// and the network and the shell bridge survive it. If Android is asleep it is woken.
+    /// new one, so the screen stays black however long it waits. Sometimes system_server restarted by
+    /// itself; mostly it did not. So when the new surfaceflinger runs and the capture stays black, the
+    /// framework is restarted (init's ctl.restart, which the shell may set where ctl.stop is refused).
+    /// A fresh system_server shows the lock screen ~40 s later, and the network and the shell bridge
+    /// survive it. If Android is asleep it is woken.
     private func watchForScreen() {
         screenReady = false
         let thread = Thread {
             let began = Date()
+            /// A black 360x672 PNG is ~2.5 KB; the lock screen or any app is tens of KB at least.
+            let drawn = 20_000
+            var blackPolls = 0
             var restarted = false
             var lastWake = Date.distantPast
             var ready = false
@@ -134,31 +138,34 @@ final class Emulator: ObservableObject {
                 Thread.sleep(forTimeInterval: 2)
                 guard let r = try? GuestBridge.shared.run(
                     "getprop sys.boot_completed; echo sf=$(getprop init.svc.surfaceflinger); "
+                    + "echo wake=$(dumpsys power 2>/dev/null | grep -m1 mWakefulness=); "
                     + "echo focus=$(dumpsys window 2>/dev/null | grep -m1 mCurrentFocus); "
-                    + "echo wake=$(dumpsys power 2>/dev/null | grep -m1 mWakefulness=)",
-                    timeout: 15) else { continue }
+                    + "echo shot=$(screencap -p 2>/dev/null | wc -c)",
+                    timeout: 20) else { continue }
                 let lines = r.out.split(separator: "\n").map(String.init)
                 func value(_ key: String) -> String {
                     lines.first { $0.hasPrefix(key + "=") }.map { String($0.dropFirst(key.count + 1)).trimmingCharacters(in: .whitespaces) } ?? ""
                 }
                 let booted = lines.first?.trimmingCharacters(in: .whitespaces) == "1"
-                let focus = value("focus"), awake = value("wake").contains("Awake")
-                let focused = focus.contains("Window{")
                 guard booted, value("sf") == "running" else { continue }
-                if focused && awake {
+                let awake = value("wake").contains("Awake")
+                let bytes = Int(value("shot")) ?? 0
+                if awake && bytes > drawn {
                     ready = true
-                    how = " (" + (focus.contains("NotificationShade") ? "lock screen" : "app") + ")"
-                        + (restarted ? ", after restarting the framework" : "")
+                    how = " (" + (value("focus").contains("NotificationShade") ? "lock screen" : "drawing")
+                        + ", \(bytes / 1024) KB capture" + (restarted ? ", after restarting the framework" : "") + ")"
                     continue
                 }
                 if !awake && Date().timeIntervalSince(lastWake) > 10 {
                     lastWake = Date()
                     HuskLog.log("ui", "Android is asleep; waking it")
                     _ = try? GuestBridge.shared.run("input keyevent KEYCODE_WAKEUP", timeout: 15)
+                    continue
                 }
-                if QemuRunner.didRestore && !focused && !restarted {
+                blackPolls += 1
+                if QemuRunner.didRestore && !restarted && blackPolls >= 2 {
                     restarted = true
-                    HuskLog.log("ui", "restored with nothing on screen; restarting Android's framework")
+                    HuskLog.log("ui", "restored onto a black screen; restarting Android's framework")
                     _ = try? GuestBridge.shared.run("setprop ctl.restart zygote", timeout: 15)
                 }
             }
