@@ -16,6 +16,7 @@
   huskctl raw '{"type": ...}'        any command, as JSON
 """
 import json
+import re
 import os
 import shutil
 import sys
@@ -61,7 +62,9 @@ def show(result):
 
 def stage(path):
     p = Path(path).expanduser()
-    with request("POST", f"/v1/stage?name={urllib.request.quote(p.name)}", p.read_bytes(),
+    # The companion stages only plain names (it serves them back by name); anything else becomes "_".
+    name = re.sub(r"[^A-Za-z0-9._ ()+-]", "_", p.name)[-200:] or "file"
+    with request("POST", f"/v1/stage?name={urllib.request.quote(name)}", p.read_bytes(),
                  "application/octet-stream", timeout=600) as r:
         return json.load(r)["name"]
 

@@ -31,7 +31,7 @@ import time
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, unquote, urlsplit
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import huskjit_core  # noqa: E402
@@ -179,7 +179,7 @@ class Handler(BaseHTTPRequestHandler):
             cmd = COMMANDS.take(min(float(q.get("wait", 25)), 55))
             return self._json(cmd) if cmd else self._send(HTTPStatus.NO_CONTENT)
         if url.path.startswith("/v1/files/"):
-            name = url.path.rsplit("/", 1)[1]
+            name = unquote(url.path.rsplit("/", 1)[1])   # the app percent-encodes it
             path = STAGE / name
             if not SAFE_NAME.match(name) or not path.is_file():
                 return self._send(HTTPStatus.NOT_FOUND, b"no such file\n")
