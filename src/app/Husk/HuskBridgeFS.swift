@@ -353,7 +353,12 @@ final class GuestBridge {
                 let n = write(fd, raw.baseAddress!.advanced(by: off), raw.count - off)
                 if n <= 0 {
                     if n < 0 && errno == EINTR { continue }
-                    throw BridgeError.io("write failed (errno \(errno))")
+                    let err = errno
+                    // A dead held connection must not be handed to the next command: run()'s one retry
+                    // relies on the failure having dropped it, and a write failure never did, so every
+                    // command after a broken pipe failed the same way until the app was restarted.
+                    if fd == control { dropControl("write failed (errno \(err))") }
+                    throw BridgeError.io("write failed (errno \(err))")
                 }
                 off += n
             }
@@ -519,7 +524,9 @@ final class GuestBridge {
         // caller compares `wc -c` against the file's real size before pm sees it.
         sequence += 1
         let token = "\(Self.marker)\(sequence):"
-        let command = "head -c \(size) > \(remote) 2>&1; echo \(token)$?\n"
+        // Quoted: an unquoted name with spaces or quotes split into several words, head failed at once,
+        // and the shell went on to read the file's bytes as commands until the connection died.
+        let command = "head -c \(size) > \(AndroidHost.quote(remote)) 2>&1; echo \(token)$?\n"
         try writeAll(fd, Data(command.utf8))
 
         var sent = 0
@@ -1289,7 +1296,8 @@ final class AndroidHost: ObservableObject {
     /// Single-quoted for a shell, with any quote of its own removed. A guest
     /// filename is chosen by whoever made the file and reaches a shell verbatim.
     nonisolated static func quote(_ path: String) -> String {
-        "'" + path.replacingOccurrences(of: "'", with: "") + "'"
+        // Escaped, not stripped: stripping changed the path itself.
+        "'" + path.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 
     /// Ask an app what it is called and what it looks like.
