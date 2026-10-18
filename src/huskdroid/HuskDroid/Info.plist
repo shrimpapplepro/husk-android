@@ -42,6 +42,8 @@
 	</array>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>HuskDroid talks to its companion on your Mac for JIT and logs.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>HuskDroid saves screenshots of Android to your photo library.</string>
 	<!-- Android's sound keeps playing while the screen is locked. -->
 	<key>UIBackgroundModes</key>
 	<array>

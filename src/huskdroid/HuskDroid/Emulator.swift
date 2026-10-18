@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 import Combine
 import Foundation
+import Photos
 import UIKit
 import UniformTypeIdentifiers
 
@@ -445,6 +446,69 @@ enum AndroidFiles {
 
     private static func fileSize(_ url: URL) -> Int {
         (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int) ?? 0
+    }
+}
+
+/// Android's own frame, as screencap draws it (Android's resolution and rotation, none of the app's
+/// chrome), saved to the iPhone's photo library as a PNG.
+@MainActor
+final class Screenshot: ObservableObject {
+    static let shared = Screenshot()
+
+    @Published private(set) var busy = false
+    @Published private(set) var toast: String?
+    private var toastID = 0
+
+    /// Only once Android draws: screencap waits forever while surfaceflinger is down.
+    var available: Bool { Emulator.shared.screenReady && !QemuRunner.shared.isSavingState }
+
+    func take() {
+        guard available, !busy else { return }
+        busy = true
+        Task.detached(priority: .userInitiated) {
+            let outcome: String
+            do {
+                let png = try GuestBridge.shared.pull("timeout 15 screencap -p", timeout: 30)
+                guard png.starts(with: [0x89, 0x50, 0x4E, 0x47]) else {
+                    throw NSError(domain: "Screenshot", code: 1,
+                                  userInfo: [NSLocalizedDescriptionKey: "Android sent no picture"])
+                }
+                try await Self.save(png)
+                HuskLog.log("ui", "screenshot saved to Photos (\(png.count / 1024) KB)")
+                outcome = "Screenshot saved to Photos"
+            } catch {
+                HuskLog.log("ui", "screenshot FAILED: \(error.localizedDescription)")
+                outcome = "Screenshot failed: \(error.localizedDescription)"
+            }
+            await MainActor.run {
+                self.busy = false
+                self.show(outcome)
+            }
+        }
+    }
+
+    private nonisolated static func save(_ png: Data) async throws {
+        guard await PHPhotoLibrary.requestAuthorization(for: .addOnly) == .authorized else {
+            throw NSError(domain: "Screenshot", code: 2, userInfo: [NSLocalizedDescriptionKey:
+                "HuskDroid can't add to Photos. Allow it in Settings › HuskDroid › Photos."])
+        }
+        let stamp = DateFormatter()
+        stamp.dateFormat = "yyyy-MM-dd 'at' HH.mm.ss"
+        let options = PHAssetResourceCreationOptions()
+        options.originalFilename = "Android \(stamp.string(from: Date())).png"
+        try await PHPhotoLibrary.shared().performChanges {
+            PHAssetCreationRequest.forAsset().addResource(with: .photo, data: png, options: options)
+        }
+    }
+
+    private func show(_ text: String) {
+        toastID += 1
+        let id = toastID
+        toast = text
+        Task {
+            try? await Task.sleep(for: .seconds(2.5))
+            if self.toastID == id { self.toast = nil }
+        }
     }
 }
 

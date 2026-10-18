@@ -7,6 +7,7 @@ import UniformTypeIdentifiers
 struct RootView: View {
     @ObservedObject private var emulator = Emulator.shared
     @ObservedObject private var runner = QemuRunner.shared
+    @ObservedObject private var screenshot = Screenshot.shared
     @State private var panelOpen = false
     @Namespace private var glass
 
@@ -45,8 +46,20 @@ struct RootView: View {
                 }
             }
             .padding(.top, 6)
+
+            if let toast = screenshot.toast {
+                Label(toast, systemImage: toast.hasPrefix("Screenshot saved") ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                    .font(.footnote.weight(.medium))
+                    .padding(.horizontal, 14).padding(.vertical, 9)
+                    .glassEffect(.regular, in: .capsule)
+                    .frame(maxHeight: .infinity, alignment: .bottom)
+                    .padding(.bottom, 24)
+                    .allowsHitTesting(false)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
         }
         .animation(.easeInOut(duration: 1.2), value: emulator.screenReady)
+        .animation(.bouncy(duration: 0.4), value: screenshot.toast)
         .preferredColorScheme(.dark)
         .statusBarHidden()
         .persistentSystemOverlays(.hidden)
@@ -276,6 +289,7 @@ struct ControlPanel: View {
     @ObservedObject private var companion = Companion.shared
     @ObservedObject private var runner = QemuRunner.shared
     @ObservedObject private var transfers = Transfers.shared
+    @ObservedObject private var screenshot = Screenshot.shared
     @State private var importing: ImportKind?
     @State private var showLogs = false
     @State private var showPhotos = false
@@ -371,6 +385,11 @@ struct ControlPanel: View {
                 Button { key.press() } label: { keyLabel(key.symbol) }
                     .accessibilityLabel(key.title)
             }
+            Button { close(); screenshot.take() } label: {
+                keyLabel(screenshot.busy ? "hourglass" : "camera.viewfinder")
+            }
+            .accessibilityLabel("Take screenshot")
+            .disabled(!screenshot.available || screenshot.busy)
             Button { Rotation.toggle(); close() } label: {
                 keyLabel(Rotation.landscape ? "rectangle.portrait.rotate" : "rectangle.landscape.rotate")
             }
