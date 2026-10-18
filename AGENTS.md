@@ -168,6 +168,8 @@ framework`, and `screen is up after N s (lock screen, ...)` ~75–90 s after Sta
 | `no snapshot matching a N MiB guest` | Save taken at another size, display mode or sound kind; one cold boot, then Save & Quit |
 | `memory layout changed ... retiring the old snapshot` | `husk-ram-failed` / memory strategy changed; the save is discarded once |
 | Black screen after a restore | Expected for ~1 min: the app restarts Android's framework (`restored onto a black screen`) and lifts the loading glow only when Android's screen capture has content. `gave up waiting` after 240 s is a real bug: check `[snap]` and `[bridge]` lines |
+| Videos pink and green | The engine lacks `husk-virgl-yuv-planes.patch` (rebuild with `scripts/build_native.sh`), or the save predates it (machine stamp without `+yuv`: one cold boot fixes it) |
+| Videos black after a restore | `media.swcodec` kept a GPU context the host lost; the app restarts it (`restarting the media codec service`). If that line is missing, `huskctl shell 'setprop ctl.restart media.swcodec'` |
 | No sound in videos | virtio-sound stall; `husk.soundDeviceKind` must be `usb` |
 | `Upgrade's application-identifier ... does not match` | The installed copy came from another signer; uninstall it (`devicectl device uninstall app`) |
 | iOS crash reports | `devicectl device info files --domain-type systemCrashLogs`, files `HuskDroid-*.ips` |

@@ -18,6 +18,8 @@ Husk's emulator engine and replaces everything around it. Husk's own README is k
   the JIT request in about 2 seconds. Off Wi-Fi, the JIT screen offers Open Tailscale, and an optional
   Tailscale Funnel keeps the app in touch with the companion from any network.
 - **Sound.** Android's audio plays on the iPhone.
+- **Video.** Videos play in their real colours in every app (gallery, players, browsers): the iOS GPU
+  path gained YUV frame support (`patches/husk-virgl-yuv-planes.patch`).
 - **Snapshots.** Save & Quit stores the whole machine; the next start restores it instead of booting
   (~75–90 s to the lock screen, against ~2 min for a cold boot).
 - **Getting things in.** Install APKs, send photos, videos and files (sorted into Pictures, Music or
@@ -37,6 +39,7 @@ Android under QEMU. HuskDroid keeps only the second, and fixes what that left br
 | App | Library, translation layer, PS4 layer, Discover, StikJIT | A new emulator-first app (`src/huskdroid`); only the engine is shared |
 | JIT | StikDebug, built-in StikJIT, TrollStore; all need LocalDevVPN | A companion on the Mac grants it over the network (`huskjit_core.py`): lockdown over TCP, a no-root userspace tunnel, debugserver over gdb-remote |
 | Sound | Off by default; virtio-sound stalls after the first sound | USB audio, hot-plugged after boot/restore and unplugged around every save |
+| Video | Pink/green in any app using Android's decoders (no YUV textures without GBM) | YV12/NV12 per-plane textures in virglrenderer; codec service restarted after a restore |
 | Snapshots | A locally saved machine never restored (size bug); every save closed all apps | Fixed restore; saving only on Save & Quit; home screen reopened; updates save first |
 | Memory | 5 GiB guest | 4 GiB cap (`husk.maxGuestMiB`), since some signers drop extended VA |
 | Networking | Shell bridge only | Port forwards from the iPhone into Android (LocalSend on 53318), adb over a tunnel |
