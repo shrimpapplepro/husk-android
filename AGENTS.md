@@ -143,7 +143,8 @@ Follow it with `huskctl logs -f`:
 ```
 
 Then: `huskctl adb devices` (the user taps Allow on Android once), and ask the user to Save & Quit so the
-first save exists. Later starts log `restored a saved machine` and the screen is up in ~45 s.
+first save exists. Later starts log `restored a saved machine`, then `restored onto a black screen; restarting Android's
+framework`, and `screen is up after N s (lock screen, ...)` ~75–90 s after Start.
 
 ## Operating it
 
@@ -166,7 +167,7 @@ first save exists. Later starts log `restored a saved machine` and the screen is
 | `save FAILED: ... non-migratable device` | A sound device on the command line; sound must be `usb` (hot-plugged), never `virtio` |
 | `no snapshot matching a N MiB guest` | Save taken at another size, display mode or sound kind; one cold boot, then Save & Quit |
 | `memory layout changed ... retiring the old snapshot` | `husk-ram-failed` / memory strategy changed; the save is discarded once |
-| Touch dead, black screen ~1 min after a restore | Expected: Android's framework restart; wait for `screen is up` |
+| Black screen after a restore | Expected for ~1 min: the app restarts Android's framework (`restored onto a black screen`) and lifts the loading glow only when Android's screen capture has content. `gave up waiting` after 240 s is a real bug: check `[snap]` and `[bridge]` lines |
 | No sound in videos | virtio-sound stall; `husk.soundDeviceKind` must be `usb` |
 | `Upgrade's application-identifier ... does not match` | The installed copy came from another signer; uninstall it (`devicectl device uninstall app`) |
 | iOS crash reports | `devicectl device info files --domain-type systemCrashLogs`, files `HuskDroid-*.ips` |
