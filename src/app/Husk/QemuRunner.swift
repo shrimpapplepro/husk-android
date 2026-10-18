@@ -232,8 +232,10 @@ final class QemuRunner: ObservableObject {
         UserDefaults.standard.string(forKey: "husk.soundDeviceKind") ?? "virtio"
     }
 
+    /// "+yuv": the GPU advertises YV12/NV12 since HuskDroid's video fix. The guest kernel caches the GPU's
+    /// capabilities, so a machine saved before then would keep faking them and show video pink and green.
     nonisolated static var machineStamp: String {
-        (glProven ? "gl" : "sw")
+        (glProven ? "gl+yuv" : "sw")
             + (soundEnabled ? (soundDeviceKind == "usb" ? "+usbsnd" : "+snd") : "")
             + (landscapeGuest ? "+land" : "")
             + (customResolution.map { "+\($0.w)x\($0.h)" } ?? "")

@@ -10,6 +10,19 @@ QEMU tree.
 
 GPL-2.0-or-later, same as the file it patches.
 
+## `husk-virgl-yuv-planes.patch`
+
+HuskDroid's own, against UTM's virglrenderer (`VIRGL_COMMIT` in `scripts/build_gpu_ios.sh`). A Linux host
+samples video frames (YV12, NV12) through EGL images of GBM buffers; iOS has no GBM, so the formats were
+not advertised, the guest's minigbm faked YV12 in one R8 texture, and every video played pink and green.
+Without GBM the patch advertises both formats, keeps one texture per plane (R8 Y/V/U, or R8 Y + RG8 UV),
+fills them from each uploaded frame (the stride arrives in the transfer's `level`, as for
+`virgl_gbm_transfer`), and hands them to the guest's per-plane sampler views, whose plane index rides in
+`first_element`. The guest's shader then converts YUV to RGB as it would on a GBM host. A view of the
+whole resource gets a CPU-converted RGBA copy instead. Applied by `scripts/build_gpu_ios.sh`.
+
+MIT, same as the files it patches.
+
 ## `husk-spirv-cross-zero-init-stride.patch`
 
 Husk's own, against SPIRV-Cross at the revision MoltenVK pins. When a compute shader's

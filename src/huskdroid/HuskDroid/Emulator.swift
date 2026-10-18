@@ -131,6 +131,7 @@ final class Emulator: ObservableObject {
             let drawn = 20_000
             var blackPolls = 0
             var restarted = false
+            var codecsRestarted = false
             var lastWake = Date.distantPast
             var ready = false
             var how = ""
@@ -153,6 +154,14 @@ final class Emulator: ObservableObject {
                 }
                 let booted = lines.first?.trimmingCharacters(in: .whitespaces) == "1"
                 guard booted, value("sf") == "running" else { continue }
+                // The software codecs run in their own service, which a framework restart does not touch.
+                // Its GPU context died with the save (the host cannot keep one), and the host drops every
+                // upload from a context it does not know -- silently: videos then play black.
+                if QemuRunner.didRestore && !codecsRestarted {
+                    codecsRestarted = true
+                    HuskLog.log("ui", "restored: restarting the media codec service (its GPU context did not survive)")
+                    _ = try? GuestBridge.shared.run("setprop ctl.restart media.swcodec", timeout: 15)
+                }
                 let awake = value("wake").contains("Awake")
                 let bytes = Int(value("shot")) ?? 0
                 if awake && bytes > drawn {
