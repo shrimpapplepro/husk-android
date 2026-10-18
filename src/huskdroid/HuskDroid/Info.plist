@@ -37,6 +37,8 @@
 	<key>LSApplicationQueriesSchemes</key>
 	<array>
 		<string>tailscale</string>
+		<string>io.tailscale.ipn.ios</string>
+		<string>io.tailscale.ipn</string>
 	</array>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>HuskDroid talks to its companion on your Mac for JIT and logs.</string>
