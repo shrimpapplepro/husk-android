@@ -111,35 +111,63 @@ final class Emulator: ObservableObject {
     /// GPU handles, Android's watchdog restarts the framework (~60 s), and only the screen that restart
     /// enables counts -- a boot_progress_enable_screen event stamped after the restore. Three minutes
     /// is the cap, so the background can never stay up for good.
+    /// When the loading background can go. A cold boot is up at sys.boot_completed. A restore comes back
+    /// in one of two ways: either the framework restarts (zygote is killed a few seconds after the display
+    /// returns, and the new framework enables the screen again ~45 s later), or it simply carries on.
+    /// Waiting only for the restart's boot_progress_enable_screen hid a working Android for the full 180 s
+    /// when it carried on, so a restore is also up once system_server has kept one pid, with
+    /// surfaceflinger running, for `steady` seconds; a pid change means a restart, and then it waits.
     private func watchForScreen() {
         screenReady = false
         let thread = Thread {
             let began = Date()
+            let steady: TimeInterval = 15
             var restoreUptimeMs: Int?
+            var framework: (pid: String, since: Date)?
+            var restarted = false
             var ready = false
+            var how = ""
             while !ready && Date().timeIntervalSince(began) < 180 {
                 Thread.sleep(forTimeInterval: 2)
                 guard let r = try? GuestBridge.shared.run(
                     "cat /proc/uptime; getprop sys.boot_completed; "
+                    + "echo ss=$(pidof system_server); echo sf=$(pidof surfaceflinger); "
                     + "logcat -b events -d -t 4000 2>/dev/null | grep boot_progress_enable_screen | tail -3",
                     timeout: 15) else { continue }
                 let lines = r.out.split(separator: "\n").map(String.init)
                 guard let uptime = lines.first.flatMap({ Double($0.split(separator: " ").first ?? "") }) else { continue }
                 let booted = lines.count > 1 && lines[1].trimmingCharacters(in: .whitespaces) == "1"
+                func value(_ key: String) -> String {
+                    lines.first { $0.hasPrefix(key + "=") }.map { String($0.dropFirst(key.count + 1)).trimmingCharacters(in: .whitespaces) } ?? ""
+                }
                 let screens = lines.compactMap { line -> Int? in
                     guard let r = line.range(of: "boot_progress_enable_screen: ") else { return nil }
                     return Int(line[r.upperBound...].trimmingCharacters(in: .whitespaces))
                 }
-                let restored = QemuRunner.didRestore
-                if restored {
-                    if restoreUptimeMs == nil { restoreUptimeMs = Int(uptime * 1000) - 3000 }
-                    ready = booted && screens.contains { $0 > restoreUptimeMs! }
-                } else {
+                guard QemuRunner.didRestore else {
                     ready = booted
+                    continue
+                }
+                if restoreUptimeMs == nil { restoreUptimeMs = Int(uptime * 1000) - 3000 }
+                if booted && screens.contains(where: { $0 > restoreUptimeMs! }) {
+                    ready = true; how = " (the framework restarted)"
+                    continue
+                }
+                let ss = value("ss"), sf = value("sf")
+                guard !restarted, !ss.isEmpty, !sf.isEmpty else { continue }
+                if let f = framework {
+                    if f.pid != ss {
+                        restarted = true
+                        HuskLog.log("ui", "the framework is restarting after the restore; waiting for its screen")
+                    } else if booted && Date().timeIntervalSince(f.since) >= steady {
+                        ready = true; how = " (the framework carried on)"
+                    }
+                } else {
+                    framework = (ss, Date())
                 }
             }
             HuskLog.log("ui", "Android's screen is up after \(Int(Date().timeIntervalSince(began))) s"
-                              + (ready ? "" : " (gave up waiting)"))
+                              + (ready ? how : " (gave up waiting)"))
             Task { @MainActor in self.screenReady = true }
         }
         thread.qualityOfService = .utility
