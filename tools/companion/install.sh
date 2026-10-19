@@ -20,13 +20,17 @@ install -m 755 $HERE/huskctl $HOME/.local/bin/huskctl
 cat > $HOME/.local/bin/huskjit-net <<EOF
 #!$PY
 # Grant JIT from the command line (no companion needed): huskjit-net [NAME] [--probe]
+# Once, on the same Wi-Fi, to allow JIT over Tailscale: huskjit-net --pair PHONE_LAN_IP
 import asyncio, sys
 sys.path.insert(0, "$DEST")
 import huskjit_core
 args = [a for a in sys.argv[1:] if not a.startswith("--")]
+log = lambda m: print(m, flush=True)
 try:
-    asyncio.run(huskjit_core.grant(name=args[0] if args else "HuskDroid", probe="--probe" in sys.argv,
-                                   log=lambda m: print(m, flush=True)))
+    if "--pair" in sys.argv:
+        asyncio.run(huskjit_core.pair(args[0], log=log))
+    else:
+        asyncio.run(huskjit_core.grant(name=args[0] if args else "HuskDroid", probe="--probe" in sys.argv, log=log))
 except huskjit_core.JitError as e:
     sys.exit(f"ERROR: {e}")
 EOF

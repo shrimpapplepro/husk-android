@@ -39,7 +39,20 @@ panel.
 
 The phone cannot grant itself JIT (TXM); an attached debugger must service the
 brk protocol. The companion does that over the network (`huskjit-net`:
-lockdown over TCP → userspace RSD tunnel → debugserver over gdb-remote).
+developer tunnel in userspace → RSD → debugserver over gdb-remote). Per phone
+address it tries two ways into the tunnel:
+
+- RemotePairing (port 49152). Works over Tailscale too, so JIT works away
+  from home, but only while the phone has joined some Wi-Fi network (iOS
+  refuses it on cellular alone). Needs a one-time record:
+  `huskjit-net --pair PHONE_LAN_IP` with both on the same Wi-Fi.
+- lockdownd (port 62078) → CoreDeviceProxy. Home Wi-Fi only: iOS resets 62078
+  over Tailscale (pymobiledevice3 shows that as a RecursionError). After a
+  reboot or network switch it can close the tunnel handshake
+  (ConnectionTerminatedError) for a while.
+
+The phone's LAN address differs per band (5 GHz / 2.4 GHz get separate
+private MACs), so `HUSKDROID_PHONE_HOSTS` lists both, then the Tailscale IP.
 
 Flow: app launches → asks the companion `POST /v1/jit` → companion attaches by
 name and streams progress → app sees `CS_DEBUGGED`, claims its 512 MiB region

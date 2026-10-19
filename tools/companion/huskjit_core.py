@@ -1,11 +1,17 @@
 """Wireless JIT for HuskDroid (and Husk): no cable, no lldb, no on-device VPN.
 
-Reaches the iPhone's lockdownd by IP (HUSKDROID_PHONE_HOSTS, tried in order), opens the
-iOS 17+ developer tunnel in userspace (no root), and drives debugserver over gdb-remote
+Reaches the iPhone by IP (HUSKDROID_PHONE_HOSTS, tried in order), opens the iOS 17+ developer
+tunnel in userspace (no root), and drives debugserver over gdb-remote
 the way Husk's husk-jit.js does under StikDebug:
   brk #0x69            -> x0 = 0xE0000069 (attach probe)
   brk #0xf00d, x16 = 1 -> allocate RX (_M), touch every 16 KiB page (M ..,1:69), x0 = addr
   brk #0xf00d, x16 = 0 -> detach
+
+Two ways in, per host:
+  RemotePairing (port 49152, needs the record `pair()` makes once over Wi-Fi). The only one that
+  works over Tailscale, so JIT works away from home -- as long as the phone has joined some
+  Wi-Fi network; on cellular alone iOS refuses it.
+  lockdownd (port 62078) -> CoreDeviceProxy. Home Wi-Fi only: over Tailscale iOS resets 62078.
 
 `grant()` is the whole job; the companion and the huskjit-net command both call it.
 """
@@ -19,6 +25,9 @@ from pathlib import Path
 
 import pymobiledevice3.remote.userspace_tunnel as ut
 from pymobiledevice3.lockdown import create_using_tcp
+from pymobiledevice3.exceptions import RemotePairingCompletedError
+from pymobiledevice3.remote.tunnel_service import (
+    CoreDeviceTunnelService, create_core_device_tunnel_service_using_remotepairing)
 from pymobiledevice3.pair_records import get_preferred_pair_record
 
 def _config():
@@ -40,6 +49,7 @@ UDID = _CONFIG.get("HUSKDROID_UDID", "")
 HOSTS = [h.strip() for h in _CONFIG.get("HUSKDROID_PHONE_HOSTS", "").split(",") if h.strip()]
 PAIR_DIR = Path.home() / ".pymobiledevice3"
 DEBUGPROXY = "com.apple.internal.dt.remote.debugproxy"
+REMOTE_PAIRING_PORT = 49152
 PAGE = 16384
 BATCH = 512
 
@@ -182,13 +192,6 @@ async def reachable(host, port=62078, timeout=3):
         return False
 
 
-async def pick_host(hosts=HOSTS):
-    for h in hosts:
-        if await reachable(h):
-            return h
-    raise JitError(f"the phone is not reachable at {', '.join(hosts)} (other network, changed address, or the route is down?)")
-
-
 async def pair_record(udid=UDID):
     PAIR_DIR.mkdir(mode=0o700, exist_ok=True)
     record = await get_preferred_pair_record(udid, PAIR_DIR)
@@ -201,28 +204,95 @@ async def pair_record(udid=UDID):
     return record
 
 
+def remote_pair_record(udid=UDID):
+    return PAIR_DIR / f"remote_{udid}.plist"
+
+
+def _use_lockdown(host, record, udid):
+    async def tcp_lockdown(serial=None, autopair=True, **_):
+        return await create_using_tcp(hostname=host, identifier=udid, pair_record=record, autopair=False)
+
+    ut.create_using_usbmux = tcp_lockdown  # the userspace tunnel's only device lookup
+    ut._create_no_root_tunnel_provider = _ORIGINAL_PROVIDER
+
+
+def _use_remote_pairing(host, udid):
+    async def provider(serial, autopair, remotepairing_fallback=True):
+        return await create_core_device_tunnel_service_using_remotepairing(
+            udid, host, REMOTE_PAIRING_PORT, autopair=False), None
+
+    ut._create_no_root_tunnel_provider = provider
+
+
+_ORIGINAL_PROVIDER = ut._create_no_root_tunnel_provider
+
+
+async def _routes(hosts, udid, record):
+    """(label, host, select) for every way in that answers, in the order to try them."""
+    paired = remote_pair_record(udid).exists()
+    up = await asyncio.gather(*(reachable(h, p) for h in hosts for p in (REMOTE_PAIRING_PORT, 62078)))
+    routes = []
+    for i, h in enumerate(hosts):
+        if paired and up[2 * i]:
+            routes.append(("RemotePairing", h, lambda h=h: _use_remote_pairing(h, udid)))
+        if up[2 * i + 1]:
+            routes.append(("lockdown", h, lambda h=h: _use_lockdown(h, record, udid)))
+    if not routes:
+        raise JitError(f"the phone is not reachable at {', '.join(hosts)} (other network, changed "
+                       "address, the route is down, or it is on cellular only?)")
+    return routes
+
+
+async def pair(host, udid=UDID, log=print):
+    """Once, with the phone on the same Wi-Fi: make the RemotePairing record that JIT over
+    Tailscale needs (goes in over lockdown, then pairs; the phone may ask to Trust this Mac)."""
+    if not _session_lock.acquire(timeout=1):
+        raise JitError("a JIT session is running")
+    try:
+        _use_lockdown(host, await pair_record(udid), udid)
+        async with ut.UserspaceRsdTunnel(serial=udid) as rsd:
+            try:
+                await CoreDeviceTunnelService(rsd).connect(autopair=True)
+            except RemotePairingCompletedError:
+                pass  # the phone hangs up once the record is saved
+        remote_pair_record(udid).chmod(0o600)
+        log(f"paired: {remote_pair_record(udid)}")
+    finally:
+        _session_lock.release()
+
+
 async def grant(name="HuskDroid", host=None, log=print, probe=False, request_timeout=120, udid=UDID):
     """Attach to `name` on the phone and service its JIT requests until it detaches."""
     if not _session_lock.acquire(timeout=1):
         raise JitError("another JIT session is already running")
     try:
-        host = host or await pick_host()
         record = await pair_record(udid)
-
-        async def tcp_lockdown(serial=None, autopair=True, **_):
-            return await create_using_tcp(hostname=host, identifier=udid, pair_record=record, autopair=False)
-
-        ut.create_using_usbmux = tcp_lockdown  # the userspace tunnel's only device lookup
-        log(f"connecting to the phone at {host}")
-        t0 = time.time()
-        async with ut.UserspaceRsdTunnel(serial=udid) as rsd:
-            conn = await rsd.create_service_connection(rsd.get_service_port(DEBUGPROXY))
-            gdb = Gdb(conn)
-            await gdb.no_ack()
-            log(f"debugserver up in {time.time() - t0:.1f}s")
-            if probe:
-                log(f"qHostInfo: {(await gdb.send('qHostInfo'))[:80]}")
+        errors = []
+        for label, h, select in await _routes([host] if host else HOSTS, udid, record):
+            select()
+            log(f"connecting to the phone at {h} ({label})")
+            t0 = time.time()
+            tunnel = ut.UserspaceRsdTunnel(serial=udid)
+            try:
+                rsd = await tunnel.aopen()
+            except Exception as e:
+                # Nothing is attached yet, so the next route is safe. RecursionError is how
+                # pymobiledevice3 reports lockdownd resetting it (it reconnects forever).
+                errors.append(f"{label} at {h}: {type(e).__name__} {e}".strip())
+                log(f"  failed: {errors[-1]}")
+                continue
+            try:
+                conn = await rsd.create_service_connection(rsd.get_service_port(DEBUGPROXY))
+                gdb = Gdb(conn)
+                await gdb.no_ack()
+                log(f"debugserver up in {time.time() - t0:.1f}s")
+                if probe:
+                    log(f"qHostInfo: {(await gdb.send('qHostInfo'))[:80]}")
+                    return
+                await _serve(gdb, name, log, request_timeout)
                 return
-            await _serve(gdb, name, log, request_timeout)
+            finally:
+                await tunnel.aclose()
+        raise JitError("no route opened the developer tunnel: " + "; ".join(errors))
     finally:
         _session_lock.release()
