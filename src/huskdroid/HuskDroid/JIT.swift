@@ -14,6 +14,10 @@ enum JITBootstrap {
     /// Read by QemuRunner for its memory budget.
     nonisolated(unsafe) static var prewarmed = false
 
+    /// One claim at a time: the debugger answers a single request, so a second caller racing the
+    /// first would see its brk go unanswered and report a failure while the region is being held.
+    private static let claimLock = NSLock()
+
     /// Before anything can execute a brk: an unanswered one returns 0 instead of killing the process.
     static func installTrapGuard() { husk_ios_jit_install_trap_handler() }
 
@@ -27,6 +31,8 @@ enum JITBootstrap {
     /// Take the region and release the debugger. Blocks while the debugger answers, so never on the
     /// main thread (the brk stops the calling thread until the companion has prepared every page).
     static func claim() -> Bool {
+        claimLock.lock()
+        defer { claimLock.unlock() }
         if prewarmed { return true }
         guard isDebuggerAttached else { return false }
         HuskLog.log("jit", "claiming \(jitBytes >> 20) MiB")
@@ -60,6 +66,8 @@ final class JITFlow: ObservableObject {
     @Published private(set) var phase: Phase = JITBootstrap.prewarmed ? .on : .off
     /// The companion's own words, newest last, for the panel.
     @Published private(set) var steps: [String] = []
+    /// Bumped when a request ends, so its attach watcher stops instead of claiming for a later one.
+    nonisolated(unsafe) private static var generation = 0
 
     func request() {
         guard !phase.isBusy else { return }
@@ -71,15 +79,17 @@ final class JITFlow: ObservableObject {
         phase = .asking
         steps = []
         HuskLog.log("jit", "asking the companion for JIT")
+        let mine = Self.generation
 
         // The companion attaches over the network; this side only watches for the attach,
         // then claims the region while the debugger is there to answer.
         let waiter = Thread {
             let deadline = Date().addingTimeInterval(90)
-            while !JITBootstrap.isDebuggerAttached && Date() < deadline && !JITBootstrap.prewarmed {
+            while !JITBootstrap.isDebuggerAttached && Date() < deadline && !JITBootstrap.prewarmed
+                    && Self.generation == mine {
                 Thread.sleep(forTimeInterval: 0.05)
             }
-            guard JITBootstrap.isDebuggerAttached else { return }
+            guard JITBootstrap.isDebuggerAttached, Self.generation == mine else { return }
             Task { @MainActor in self.phase = .claiming }
             let ok = JITBootstrap.claim()
             Task { @MainActor in
@@ -104,6 +114,7 @@ final class JITFlow: ObservableObject {
                 if !JITBootstrap.prewarmed { phase = .failed(error.localizedDescription) }
             }
             // The region is the truth, whatever the stream said last.
+            if !JITBootstrap.prewarmed && !JITBootstrap.isDebuggerAttached { Self.generation += 1 }
             if JITBootstrap.prewarmed { phase = .on }
             else if phase.isBusy { phase = .failed(steps.last ?? "The companion stopped before JIT was on.") }
         }
