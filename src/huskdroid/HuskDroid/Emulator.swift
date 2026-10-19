@@ -398,7 +398,36 @@ enum RemoteCommands {
 /// Putting things into Android: APKs installed with pm, other files copied into a folder by type and
 /// registered with Android's media library, so Gallery and Files see them at once.
 enum AndroidFiles {
+    /// Why this APK can't run here, before sending 80 MB for pm to refuse it; nil when it can (or
+    /// the APK can't be read, in which case pm decides).
+    static func incompatibility(_ apk: URL) -> String? {
+        guard let abis = ApkABIs.read(apk), !abis.isEmpty, !abis.contains("arm64-v8a") else { return nil }
+        let bits = abis.allSatisfy { $0.hasPrefix("armeabi") } ? "32-bit ARM" : abis.sorted().joined(separator: ", ")
+        return "\(apk.lastPathComponent) only has \(bits) code, and HuskDroid's Android runs 64-bit (arm64) apps only."
+    }
+
+    /// pm's "Failure [INSTALL_FAILED_X: detail]" in words, or nil when pm said Success.
+    static func failureReason(_ pmOutput: String) -> String? {
+        guard !pmOutput.contains("Success") else { return nil }
+        guard let code = pmOutput.firstMatch(of: /INSTALL_[A-Z_]+/).map({ String($0.output) }) else {
+            return "Android refused it. See Logs."
+        }
+        switch code {
+        case "INSTALL_FAILED_NO_MATCHING_ABIS": return "it has no 64-bit (arm64) code, which HuskDroid's Android needs."
+        case "INSTALL_FAILED_UPDATE_INCOMPATIBLE": return "a different signature of this app is installed; uninstall it in Android first."
+        case "INSTALL_FAILED_VERSION_DOWNGRADE": return "a newer version is already installed."
+        case "INSTALL_FAILED_INSUFFICIENT_STORAGE": return "Android is out of storage."
+        case "INSTALL_FAILED_OLDER_SDK": return "it needs a newer Android than this one."
+        case "INSTALL_PARSE_FAILED_NOT_APK", "INSTALL_PARSE_FAILED_NO_CERTIFICATES": return "it isn't a complete, signed APK (split APK bundles need all their parts)."
+        default: return "Android refused it (\(code))."
+        }
+    }
+
     static func install(_ apk: URL) throws -> String {
+        if let why = incompatibility(apk) {
+            HuskLog.log("files", "install \(apk.lastPathComponent): not sent: \(why)")
+            return "Failure [INSTALL_FAILED_NO_MATCHING_ABIS: checked before sending]"
+        }
         let remote = "/data/local/tmp/huskdroid-install.apk"
         HuskLog.log("files", "install \(apk.lastPathComponent): pushing")
         try GuestBridge.shared.push(apk, to: remote) { _ in }
@@ -446,6 +475,41 @@ enum AndroidFiles {
 
     private static func fileSize(_ url: URL) -> Int {
         (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int) ?? 0
+    }
+}
+
+/// The native-code ABIs an APK carries (its lib/<abi>/ folders), read from the zip's central
+/// directory without unpacking anything. Empty for a pure-Java APK; nil when it isn't a readable zip.
+enum ApkABIs {
+    static func read(_ url: URL) -> Set<String>? {
+        guard let h = try? FileHandle(forReadingFrom: url) else { return nil }
+        defer { try? h.close() }
+        guard let size = try? h.seekToEnd(), size >= 22 else { return nil }
+        // End of central directory: the last 22 bytes plus up to 64 KiB of comment.
+        let tail = min(size, 22 + 65_535)
+        try? h.seek(toOffset: size - tail)
+        guard let end = try? h.read(upToCount: Int(tail)) else { return nil }
+        let bytes = [UInt8](end)
+        guard let eocd = stride(from: bytes.count - 22, through: 0, by: -1).first(where: {
+            bytes[$0] == 0x50 && bytes[$0 + 1] == 0x4B && bytes[$0 + 2] == 0x05 && bytes[$0 + 3] == 0x06
+        }) else { return nil }
+        func u16(_ b: [UInt8], _ o: Int) -> Int { Int(b[o]) | Int(b[o + 1]) << 8 }
+        func u32(_ b: [UInt8], _ o: Int) -> Int { u16(b, o) | u16(b, o + 2) << 16 }
+        let count = u16(bytes, eocd + 10), dirSize = u32(bytes, eocd + 12), dirOffset = u32(bytes, eocd + 16)
+        guard dirOffset + dirSize <= size, (try? h.seek(toOffset: UInt64(dirOffset))) != nil,
+              let dir = try? h.read(upToCount: dirSize) else { return nil }
+        let d = [UInt8](dir)
+        var abis = Set<String>(), o = 0
+        for _ in 0..<count {
+            guard o + 46 <= d.count, u32(d, o) == 0x0201_4B50 else { return nil }
+            let nameLen = u16(d, o + 28), extraLen = u16(d, o + 30), commentLen = u16(d, o + 32)
+            guard o + 46 + nameLen <= d.count else { return nil }
+            let name = String(decoding: d[(o + 46)..<(o + 46 + nameLen)], as: UTF8.self)
+            let parts = name.split(separator: "/")
+            if parts.count == 3, parts[0] == "lib", parts[2].hasSuffix(".so") { abis.insert(String(parts[1])) }
+            o += 46 + nameLen + extraLen + commentLen
+        }
+        return abis
     }
 }
 
@@ -543,7 +607,7 @@ final class Transfers: ObservableObject {
         result = nil
         busy = install ? "Installing \(locals[0].lastPathComponent)…" : "Sending \(locals.count) file\(locals.count == 1 ? "" : "s")…"
         DispatchQueue.global(qos: .userInitiated).async {
-            var sent: [String] = [], failed: [String] = []
+            var sent: [String] = [], failed: [String] = [], notes: [String] = []
             for (i, local) in locals.enumerated() {
                 Task { @MainActor in
                     if locals.count > 1 { self.busy = "Sending \(i + 1) of \(locals.count)…" }
@@ -551,8 +615,16 @@ final class Transfers: ObservableObject {
                 do {
                     if install {
                         let out = try AndroidFiles.install(local)
-                        out.contains("Success") ? sent.append(local.lastPathComponent) : failed.append(local.lastPathComponent)
+                        if let why = AndroidFiles.failureReason(out) {
+                            failed.append(local.lastPathComponent)
+                            notes.append(AndroidFiles.incompatibility(local) ?? "\(local.lastPathComponent): \(why)")
+                        } else {
+                            sent.append(local.lastPathComponent)
+                        }
                     } else {
+                        if local.pathExtension.lowercased() == "apk", let why = AndroidFiles.incompatibility(local) {
+                            notes.append(why + " Android will say \"App not installed\".")
+                        }
                         sent.append(try AndroidFiles.push(local))
                     }
                 } catch {
@@ -564,11 +636,13 @@ final class Transfers: ObservableObject {
             let text: String
             if install {
                 text = failed.isEmpty ? "Installed \(sent.first ?? "the app"). It's in Android's app list."
-                                      : "Install failed: \(failed.joined(separator: ", ")). See Logs."
+                                      : "Install failed: " + (notes.isEmpty ? "\(failed.joined(separator: ", ")). See Logs."
+                                                                            : notes.joined(separator: " "))
             } else {
                 let folders = Set(sent.map { ($0 as NSString).deletingLastPathComponent.replacingOccurrences(of: "/sdcard/", with: "") })
                 text = (sent.isEmpty ? "" : "Sent \(sent.count) to Android › \(folders.sorted().joined(separator: ", ")). Open Files or Gallery in Android.")
                      + (failed.isEmpty ? "" : " Failed: \(failed.joined(separator: ", ")).")
+                     + (notes.isEmpty ? "" : " " + notes.joined(separator: " "))
             }
             Task { @MainActor in self.busy = nil; self.result = text }
         }
