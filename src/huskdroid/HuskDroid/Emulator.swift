@@ -326,7 +326,7 @@ enum RemoteCommands {
 
     static func run(_ cmd: [String: Any]) async -> Reply {
         let type = cmd["type"] as? String ?? ""
-        HuskLog.log("remote", "command: \(type)")
+        if type != "tunnel" { HuskLog.log("remote", "command: \(type)") }   // tunnels log themselves
         do {
             switch type {
             case "shell":
@@ -363,6 +363,10 @@ enum RemoteCommands {
                 let r = try GuestBridge.shared.run("monkey -p \(AndroidHost.quote(pkg)) -c android.intent.category.LAUNCHER 1", timeout: 30)
                 return json(["ok": r.status == 0, "output": r.out])
             case "tunnel":
+                // adb on the Mac redials every few seconds for as long as it remembers the device.
+                guard await MainActor.run(body: { Emulator.shared.started }) else {
+                    return json(["ok": false, "error": "Android is not running"])
+                }
                 let (host, token) = await MainActor.run { (Companion.shared.host, Companion.shared.tunnelToken) }
                 guard let host, let session = cmd["session"] as? String,
                       let guestPort = cmd["guestPort"] as? Int, let tunnelPort = cmd["tunnelPort"] as? Int else {
@@ -593,15 +597,22 @@ final class Transfers: ObservableObject {
         for url in urls {
             let scoped = securityScoped && url.startAccessingSecurityScopedResource()
             defer { if scoped { url.stopAccessingSecurityScopedResource() } }
-            let local = FileManager.default.temporaryDirectory.appendingPathComponent(url.lastPathComponent)
-            try? FileManager.default.removeItem(at: local)
+            // A folder each: two picked files with one name (from different folders) must not overwrite
+            // each other, or the first is lost and the second sent twice.
+            let dir = FileManager.default.temporaryDirectory.appendingPathComponent("send-\(UUID().uuidString)")
+            let local = dir.appendingPathComponent(url.lastPathComponent)
             do {
+                try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
                 try FileManager.default.copyItem(at: url, to: local)
                 locals.append(local)
             } catch {
                 HuskLog.log("files", "could not read \(url.lastPathComponent): \(error.localizedDescription)")
             }
-            if !securityScoped { try? FileManager.default.removeItem(at: url) }
+            // Photos picks arrive in a folder of their own (PickedMedia); take it with them.
+            if !securityScoped {
+                let folder = url.deletingLastPathComponent()
+                try? FileManager.default.removeItem(at: folder.lastPathComponent.hasPrefix("picked-") ? folder : url)
+            }
         }
         guard !locals.isEmpty else { result = "Couldn't read the picked file."; return }
         result = nil
@@ -631,7 +642,7 @@ final class Transfers: ObservableObject {
                     HuskLog.log("files", "FAILED \(local.lastPathComponent): \(error.localizedDescription)")
                     failed.append(local.lastPathComponent)
                 }
-                try? FileManager.default.removeItem(at: local)
+                try? FileManager.default.removeItem(at: local.deletingLastPathComponent())
             }
             let text: String
             if install {

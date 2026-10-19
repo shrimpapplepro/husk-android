@@ -291,6 +291,9 @@ struct ControlPanel: View {
     @ObservedObject private var transfers = Transfers.shared
     @ObservedObject private var screenshot = Screenshot.shared
     @State private var importing: ImportKind?
+    /// What the open importer is for. Kept apart from `importing`, which the sheet's dismissal can
+    /// clear before the completion runs -- an Install APK would then go out as a plain send.
+    @State private var importKind: ImportKind = .files
     @State private var showLogs = false
     @State private var showPhotos = false
     @State private var photoItems: [PhotosPickerItem] = []
@@ -306,10 +309,10 @@ struct ControlPanel: View {
             buttons
             Divider()
             HStack(spacing: 10) {
-                panelButton("Install APK", "square.and.arrow.down") { importing = .apk }
+                panelButton("Install APK", "square.and.arrow.down") { importKind = .apk; importing = .apk }
                 Menu {
                     Button { showPhotos = true } label: { Label("Photos & Videos", systemImage: "photo.on.rectangle") }
-                    Button { importing = .files } label: { Label("Files", systemImage: "folder") }
+                    Button { importKind = .files; importing = .files } label: { Label("Files", systemImage: "folder") }
                 } label: {
                     panelLabel("Send to Android", "square.and.arrow.up.on.square")
                 }
@@ -328,11 +331,10 @@ struct ControlPanel: View {
         }
         .padding(.horizontal, 18).padding(.top, 6).padding(.bottom, 18)
         .fileImporter(isPresented: Binding(get: { importing != nil }, set: { if !$0 { importing = nil } }),
-                      allowedContentTypes: importing == .apk ? [UTType("com.android.package-archive") ?? .data] : [.item],
-                      allowsMultipleSelection: importing == .files) { picked in
-            let kind = importing
+                      allowedContentTypes: importKind == .apk ? [UTType("com.android.package-archive") ?? .data] : [.item],
+                      allowsMultipleSelection: importKind == .files) { picked in
             guard case let .success(urls) = picked else { return }
-            transfers.send(urls, securityScoped: true, install: kind == .apk)
+            transfers.send(urls, securityScoped: true, install: importKind == .apk)
         }
         // Compatible encoding: JPEG and H.264 rather than HEIC/HEVC, which not every Android app opens.
         .photosPicker(isPresented: $showPhotos, selection: $photoItems, maxSelectionCount: 30,

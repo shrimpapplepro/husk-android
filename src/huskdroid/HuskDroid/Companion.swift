@@ -31,6 +31,9 @@ final class Companion: ObservableObject {
         .split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
         .compactMap { URL(string: $0.contains("://") ? $0 : "http://\($0)") }
     private var base: URL?
+    /// Bumped on every new link. A command loop belongs to one link: its long-poll can outlive a drop,
+    /// and finishing after the relink it would either run beside the new loop or drop the new link.
+    private var linkID = 0
     private var started = false
     private var lookSoon = false
     private let shipper = LogShipper()
@@ -71,9 +74,11 @@ final class Companion: ObservableObject {
                     base = found
                     link = .linked(found.host ?? "?")
                     HuskLog.log("companion", "linked to \(found.absoluteString) over \(route ?? "?")")
+                    linkID += 1
+                    let id = linkID
                     await hello()
                     shipper.start { [weak self] text in await self?.post("/v1/logs", body: Data(text.utf8), type: "text/plain") ?? false }
-                    Task { await self.commandLoop() }
+                    Task { await self.commandLoop(link: id) }
                 } else {
                     link = .offline(token.isEmpty ? "This build has no companion token." : "Not reachable on Wi-Fi or Tailscale.")
                 }
@@ -160,9 +165,9 @@ final class Companion: ObservableObject {
         }
     }
 
-    /// Long-poll for commands and run each one. Ends when the link drops; maintain() starts another.
-    private func commandLoop() async {
-        while base != nil {
+    /// Long-poll for commands and run each one. Ends when its link drops; maintain() starts another.
+    private func commandLoop(link: Int) async {
+        while base != nil && linkID == link {
             guard let req = request("/v1/next?wait=25") else { return }
             do {
                 let (data, resp) = try await slow.data(for: req)
@@ -176,7 +181,7 @@ final class Companion: ObservableObject {
                     await MainActor.run { reply.after?() }
                 }
             } catch {
-                dropLink(error.localizedDescription)
+                if linkID == link { dropLink(error.localizedDescription) }
                 return
             }
         }
@@ -215,11 +220,19 @@ final class LogShipper {
         t.setEventHandler { [weak self] in
             guard let self else { return }
             var out = ""
-            for f in self.files { out += self.newLines(f.path, tag: f.tag) }
+            var reached: [String: UInt64] = [:]
+            for f in self.files {
+                let (text, end) = self.newLines(f.path, tag: f.tag)
+                out += text
+                if let end { reached[f.path] = end }
+            }
             guard !out.isEmpty else { return }
             let sem = DispatchSemaphore(value: 0)
-            Task { _ = await send(out); sem.signal() }
+            nonisolated(unsafe) var delivered = false
+            Task { delivered = await send(out); sem.signal() }
             sem.wait()
+            // Undelivered lines are sent again next time rather than skipped.
+            if delivered { self.offsets.merge(reached) { $1 } }
         }
         timer = t
         t.resume()
@@ -230,20 +243,21 @@ final class LogShipper {
         timer = nil
     }
 
-    private func newLines(_ path: String, tag: String) -> String {
-        guard let h = FileHandle(forReadingAtPath: path) else { return "" }
+    /// The whole lines after what was last delivered, and the offset they end at.
+    private func newLines(_ path: String, tag: String) -> (String, UInt64?) {
+        guard let h = FileHandle(forReadingAtPath: path) else { return ("", nil) }
         defer { try? h.close() }
         let size = (try? h.seekToEnd()) ?? 0
         var from = offsets[path] ?? max(0, size > 64_000 ? size - 64_000 : 0)
         if size < from { from = 0 }   // a new run truncated the file
-        guard size > from else { return "" }
+        guard size > from else { return ("", nil) }
         try? h.seek(toOffset: from)
         let data = (try? h.read(upToCount: Int(min(size - from, 512_000)))) ?? Data()
         // Only whole lines; the rest waits for the next tick.
-        guard let lastNewline = data.lastIndex(of: 0x0A) else { return "" }
-        offsets[path] = from + UInt64(lastNewline + 1)
+        guard let lastNewline = data.lastIndex(of: 0x0A) else { return ("", nil) }
         let text = String(decoding: data[..<(lastNewline + 1)], as: UTF8.self)
-        return tag.isEmpty ? text : text.split(separator: "\n").map { tag + $0 + "\n" }.joined()
+        return (tag.isEmpty ? text : text.split(separator: "\n").map { tag + $0 + "\n" }.joined(),
+                from + UInt64(lastNewline + 1))
     }
 }
 

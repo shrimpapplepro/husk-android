@@ -293,10 +293,13 @@ class Tunnels:
     LOCAL = {15555: 5555}   # this Mac's port -> the guest port it reaches
     TUNNEL_PORT = 8791
 
+    APP_GONE_AFTER = 60   # seconds without a poll from the app: it is closed or offline
+
     def __init__(self):
         self.waiting = {}
         self.cond = threading.Condition()
         self.ids = itertools.count(1)
+        self.last_failure = None
 
     def start(self):
         for local, guest in self.LOCAL.items():
@@ -321,15 +324,32 @@ class Tunnels:
 
     def _open(self, client, guest):
         sid = f"t{next(self.ids)}"
-        cid = COMMANDS.put({"type": "tunnel", "session": sid, "guestPort": guest, "tunnelPort": self.TUNNEL_PORT})
-        with self.cond:
-            self.cond.wait_for(lambda: sid in self.waiting, 20)
-            app = self.waiting.pop(sid, None)
-        COMMANDS.wait_result(cid, 0)  # its result is not needed; drop it
+        app, refusal = None, None
+        seen = STATE["last_seen"]
+        if not seen or time.time() - seen > self.APP_GONE_AFTER:
+            refusal = "the app is not connected"
+        else:
+            cid = COMMANDS.put({"type": "tunnel", "session": sid, "guestPort": guest,
+                                "tunnelPort": self.TUNNEL_PORT})
+            deadline = time.time() + 20
+            while app is None and refusal is None and time.time() < deadline:
+                with self.cond:
+                    self.cond.wait_for(lambda: sid in self.waiting, 0.5)
+                    app = self.waiting.pop(sid, None)
+                with COMMANDS.cond:
+                    result = COMMANDS.results.get(cid)
+                if app is None and result is not None and not result.get("ok"):
+                    refusal = result.get("error") or "the app refused"
+            COMMANDS.wait_result(cid, 0)  # its result is not needed past this point; drop it
         if app is None:
-            LOGS.add("companion", f"tunnel {sid}: the app did not dial back")
+            why = refusal or "the app did not dial back"
+            # adb redials a remembered device every few seconds: say it once, not every time.
+            if why != self.last_failure:
+                LOGS.add("companion", f"tunnel {sid}: {why} (repeats are not logged)")
+                self.last_failure = why
             client.close()
             return
+        self.last_failure = None
         LOGS.add("companion", f"tunnel {sid}: open to Android's {guest}")
         self._pipe(client, app, sid)
 
